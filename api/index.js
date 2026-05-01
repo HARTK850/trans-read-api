@@ -1,7 +1,6 @@
 /**
  * @file api/index.js
  * @description נקודת הכניסה (Serverless Endpoint) למערכת ה-IVR החכמה לתמלול והקראה.
- * מותאם אישית לקבלת טוקן ישירות מימות המשיח.
  */
 
 const { GeminiManager, YemotManager, GEMINI_VOICES } = require('./core');
@@ -13,11 +12,11 @@ const GEMINI_API_KEYS = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEY
     "YOUR_GEMINI_API_KEY_1"
 ];
 
-// בניית מנהל Gemini בלבד ברמה הגלובלית
+// בניית מנהל Gemini
 const gemini = new GeminiManager(GEMINI_API_KEYS);
 
-// נתיב זמני בימות המשיח לשמירת הקלטות שטרם עובדו
-const TEMP_FOLDER = "ivr2:/Temp_Gemini_App";
+// נתיב זמני בימות המשיח לשמירת הקלטות שטרם עובדו (ללא הקידומת ivr2: עבור פקודת ההקלטה)
+const TEMP_FOLDER = "/Temp_Gemini_App";
 
 // ============================================================================
 // פונקציות עזר ליצירת תגובות בפורמט ימות המשיח
@@ -41,7 +40,6 @@ function buildYemotResponse(action, content, nextState = {}) {
 module.exports = async function handler(req, res) {
     const query = req.method === 'POST' ? { ...req.query, ...req.body } : req.query;
 
-    // הגדרת מנהל ימות המשיח דינמית לפי הטוקן שמגיע מהבקשה
     const YEMOT_TOKEN = query.yemot_token;
     if (!YEMOT_TOKEN) {
         console.error("[Error] חסר טוקן של ימות המשיח בבקשה!");
@@ -51,7 +49,6 @@ module.exports = async function handler(req, res) {
     const ApiPhone = query.ApiPhone || "Unknown";
     const ApiCallId = query.ApiCallId || "UnknownCall";
     
-    // קריאת המצב הנוכחי (State). אם אין, אנחנו בהתחלה (שלב 0)
     const state = parseInt(query.state || "0", 10);
     
     console.log(`[IVR Request] שיחה: ${ApiCallId}, טלפון: ${ApiPhone}, שלב: ${state}`);
@@ -61,9 +58,11 @@ module.exports = async function handler(req, res) {
 
         switch (state) {
             case 0:
+                // שלב 0: הקלטת הטקסט.
+                // פרמטרים לפי התיעוד: 1:שם, 2:שימוש_בקיים(no), 3:סוג(record), 4:נתיב, 5:שם_קובץ, 6:סיום_בסולמית(yes), 7:שמירה_בניתוק(yes), 8:הוספה_לקיים(no), 9:מינימום_שניות, 10:מקסימום_שניות
                 yemotRes = buildYemotResponse(
                     "read", 
-                    `t-ברוכים_הבאים_למערכת_היצירה_הקולית_הקליטו_את_הטקסט_שברצונכם_להקריא_ולאחר_מכן_הקישו_סולמית=UserAudioRecord,no,1,1,15,record,${TEMP_FOLDER},${ApiCallId}_main,no,yes,yes`,
+                    `t-ברוכים הבאים למערכת היצירה הקולית. הקליטו את הטקסט שברצונכם להקריא ולאחר מכן הקישו סולמית=UserAudioRecord,no,record,${TEMP_FOLDER},${ApiCallId}_main,yes,yes,no,2,120`,
                     { state: 1, yemot_token: YEMOT_TOKEN }
                 );
                 break;
@@ -78,7 +77,7 @@ module.exports = async function handler(req, res) {
                 if (!transcribedText || transcribedText.length < 2) {
                     yemotRes = buildYemotResponse(
                         "read",
-                        `t-לא_הצלחנו_להבין_את_ההקלטה_אנא_נסו_שוב=UserAudioRecord,no,1,1,15,record,${TEMP_FOLDER},${ApiCallId}_main,no,yes,yes`,
+                        `t-לא הצלחנו להבין את ההקלטה אנא נסו שוב=UserAudioRecord,no,record,${TEMP_FOLDER},${ApiCallId}_main,yes,yes,no,2,120`,
                         { state: 1, yemot_token: YEMOT_TOKEN }
                     );
                     break;
@@ -86,9 +85,10 @@ module.exports = async function handler(req, res) {
 
                 await yemot.uploadTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`, transcribedText);
 
+                // פרמטרי Digits: 1:שם, 2:קיים(no), 3:סוג(Digits), 4:מקסימום_ספרות(1), 5:מינימום(1), 6:זמן_המתנה(10), 7:הקראה_חזרה(No), 8:חסימת_כוכבית(yes)
                 yemotRes = buildYemotResponse(
                     "read",
-                    `t-הטקסט_נקלט_בהצלחה_לבחירת_קול_של_גבר_הקישו_1_לבחירת_קול_של_אישה_הקישו_2=VoiceGender,no,1,1,10,Digits,no`,
+                    `t-הטקסט נקלט בהצלחה. t-לבחירת קול של גבר הקישו 1. t-לבחירת קול של אישה הקישו 2=VoiceGender,no,Digits,1,1,10,No,yes`,
                     { state: 2, yemot_token: YEMOT_TOKEN }
                 );
                 break;
@@ -98,16 +98,15 @@ module.exports = async function handler(req, res) {
                 let isMale = genderChoice === "1";
                 const voices = isMale ? GEMINI_VOICES.MALE : GEMINI_VOICES.FEMALE;
                 
-                let menuPrompt = "t-אנא_בחרו_את_הקול_הרצוי.";
+                let menuPrompt = "t-אנא בחרו את הקול הרצוי. ";
                 for (let i = 0; i < voices.length; i++) {
-                    const descSafe = voices[i].desc.replace(/ /g, "_");
-                    menuPrompt += `t-ל${descSafe}_הקישו_${i + 1}.`;
+                    menuPrompt += `t-ל${voices[i].desc} הקישו ${i + 1}. `;
                 }
-                menuPrompt += "t-בסיום_הקישו_סולמית";
+                menuPrompt += "t-בסיום הקישו סולמית";
 
                 yemotRes = buildYemotResponse(
                     "read",
-                    `${menuPrompt}=VoiceIndex,no,2,1,15,Number,no`,
+                    `${menuPrompt}=VoiceIndex,no,Digits,2,1,15,No,yes`,
                     { state: 3, gender: isMale ? "MALE" : "FEMALE", yemot_token: YEMOT_TOKEN }
                 );
                 break;
@@ -120,7 +119,7 @@ module.exports = async function handler(req, res) {
                 if (isNaN(voiceIndex) || voiceIndex < 0 || voiceIndex >= voiceList.length) {
                     yemotRes = buildYemotResponse(
                         "read",
-                        `t-בחירה_שגויה_נא_נסו_שוב=VoiceIndex,no,2,1,10,Number,no`,
+                        `t-בחירה שגויה נא נסו שוב=VoiceIndex,no,Digits,2,1,10,No,yes`,
                         { state: 3, gender: selectedGender, yemot_token: YEMOT_TOKEN }
                     );
                     break;
@@ -128,11 +127,11 @@ module.exports = async function handler(req, res) {
 
                 const selectedVoiceId = voiceList[voiceIndex].id;
 
-                const styleMenu = `t-לבחירת_סגנון_רגיל_הקישו_1.t-לסגנון_שמח_ונלהב_הקישו_2.t-לסגנון_רציני_הקישו_3.t-להגדרת_סגנון_מותאם_אישית_בהקלטה_הקישו_4`;
+                const styleMenu = `t-לבחירת סגנון רגיל הקישו 1. t-לסגנון שמח ונלהב הקישו 2. t-לסגנון רציני הקישו 3. t-להגדרת סגנון מותאם אישית בהקלטה הקישו 4`;
                 
                 yemotRes = buildYemotResponse(
                     "read",
-                    `${styleMenu}=StyleChoice,no,1,1,10,Digits,no`,
+                    `${styleMenu}=StyleChoice,no,Digits,1,1,10,No,yes`,
                     { state: 4, voiceId: selectedVoiceId, yemot_token: YEMOT_TOKEN }
                 );
                 break;
@@ -144,7 +143,7 @@ module.exports = async function handler(req, res) {
                 if (styleChoice === "4") {
                     yemotRes = buildYemotResponse(
                         "read",
-                        `t-אנא_הקליטו_את_הנחיות_הבמאי_לסגנון_ההקראה_הרצוי_ולאחר_מכן_הקישו_סולמית=CustomStyleRecord,no,1,1,15,record,${TEMP_FOLDER},${ApiCallId}_style,no,yes,yes`,
+                        `t-אנא הקליטו את הנחיות הבמאי לסגנון ההקראה הרצוי ולאחר מכן הקישו סולמית=CustomStyleRecord,no,record,${TEMP_FOLDER},${ApiCallId}_style,yes,yes,no,2,60`,
                         { state: 5, voiceId: voiceId, styleType: "custom", yemot_token: YEMOT_TOKEN }
                     );
                 } else {
@@ -154,7 +153,7 @@ module.exports = async function handler(req, res) {
                     
                     yemotRes = buildYemotResponse(
                         "read",
-                        `t-אנו_מייצרים_כעת_את_קובץ_השמע_זה_עשוי_לקחת_מספר_שניות_להמשך_הקישו_1=ContinueToTTS,no,1,1,1,Digits,no`,
+                        `t-אנו מייצרים כעת את קובץ השמע זה עשוי לקחת מספר שניות. להמשך הקישו 1=ContinueToTTS,no,Digits,1,1,5,No,yes`,
                         { state: 6, voiceId: voiceId, sysInst: systemInstruction, yemot_token: YEMOT_TOKEN }
                     );
                 }
@@ -170,7 +169,7 @@ module.exports = async function handler(req, res) {
 
                 yemotRes = buildYemotResponse(
                     "read",
-                    `t-הנחיית_הסגנון_נקלטה_אנו_מייצרים_את_קובץ_השמע_להמשך_הקישו_1=ContinueToTTS,no,1,1,1,Digits,no`,
+                    `t-הנחיית הסגנון נקלטה אנו מייצרים את קובץ השמע. להמשך הקישו 1=ContinueToTTS,no,Digits,1,1,5,No,yes`,
                     { state: 6, voiceId: styleVoiceId, sysInst: transcribedStyleText, yemot_token: YEMOT_TOKEN }
                 );
                 break;
@@ -199,17 +198,18 @@ module.exports = async function handler(req, res) {
                     
                     await yemot.uploadFile(finalSavedPath, ttsAudioBuffer);
 
-                    const promptToUser = `f-${TEMP_FOLDER}/${ApiCallId}_tts.t-הקובץ_הושמע_ונשמר_בהצלחה_בשלוחה_${folder.replace(/\//g, "_")}_כקובץ_מספר_${nextFileName}.t-האם_לשמור_במיקום_נוסף_לאישור_הקישו_1_לביטול_וחזרה_לתפריט_הראשי_הקישו_2`;
+                    // השמעת הקובץ שנוצר באמצעות הפקודה f-
+                    const promptToUser = `f-${TEMP_FOLDER}/${ApiCallId}_tts.t-הקובץ הושמע ונשמר בהצלחה בשלוחה. t-האם לשמור במיקום נוסף לאישור הקישו 1 לביטול וחזרה לתפריט הראשי הקישו 2`;
 
                     yemotRes = buildYemotResponse(
                         "read",
-                        `${promptToUser}=UserChoiceAdditionalSave,no,1,1,15,Digits,no`,
+                        `${promptToUser}=UserChoiceAdditionalSave,no,Digits,1,1,15,No,yes`,
                         { state: 7, yemot_token: YEMOT_TOKEN }
                     );
                 } else {
                     yemotRes = buildYemotResponse(
                         "read",
-                        `f-${TEMP_FOLDER}/${ApiCallId}_tts.t-הקובץ_הושמע_בהצלחה_הקישו_את_מספר_השלוחה_בה_תרצו_לשמור_את_הקובץ_ובסיום_הקישו_סולמית=TargetFolder,no,1,10,15,Digits,no`,
+                        `f-${TEMP_FOLDER}/${ApiCallId}_tts.t-הקובץ הושמע בהצלחה. הקישו את מספר השלוחה בה תרצו לשמור את הקובץ ובסיום הקישו סולמית=TargetFolder,no,Digits,15,1,15,No,yes`,
                         { state: 8, yemot_token: YEMOT_TOKEN }
                     );
                 }
@@ -222,7 +222,7 @@ module.exports = async function handler(req, res) {
                 } else if (userChoiceAdd === "1") {
                     yemotRes = buildYemotResponse(
                         "read",
-                        `t-הקישו_את_מספר_השלוחה_עבור_העותק_הנוסף_ובסיום_הקישו_סולמית=TargetFolder,no,1,10,15,Digits,no`,
+                        `t-הקישו את מספר השלוחה עבור העותק הנוסף ובסיום הקישו סולמית=TargetFolder,no,Digits,15,1,15,No,yes`,
                         { state: 8, skipDefaultPrompt: "yes", yemot_token: YEMOT_TOKEN }
                     );
                 } else {
@@ -249,11 +249,11 @@ module.exports = async function handler(req, res) {
                 const skipDefaultPrompt = query.skipDefaultPrompt === "yes";
 
                 if (skipDefaultPrompt) {
-                    yemotRes = `id_list_message=t-העותק_נשמר_בהצלחה_בשלוחה_${cleanFolder.replace(/\//g, "_")}_כקובץ_מספר_${seqFileName}.&go_to_folder=/`;
+                    yemotRes = `id_list_message=t-העותק נשמר בהצלחה כקובץ מספר ${seqFileName}.&go_to_folder=/`;
                 } else {
                     yemotRes = buildYemotResponse(
                         "read",
-                        `t-הקובץ_נשמר_בהצלחה_בשלוחה_${cleanFolder.replace(/\//g, "_")}_כקובץ_מספר_${seqFileName}.t-האם_תרצו_להגדיר_שלוחה_זו_כברירת_המחדל_לשמירות_הבאות_לאישור_הקישו_1_לסיום_הקישו_2=SetDefaultChoice,no,1,1,10,Digits,no`,
+                        `t-הקובץ נשמר בהצלחה כקובץ מספר ${seqFileName}. t-האם תרצו להגדיר שלוחה זו כברירת המחדל לשמירות הבאות. לאישור הקישו 1 לסיום הקישו 2=SetDefaultChoice,no,Digits,1,1,10,No,yes`,
                         { state: 9, targetFolder: cleanFolder, yemot_token: YEMOT_TOKEN }
                     );
                 }
@@ -267,9 +267,9 @@ module.exports = async function handler(req, res) {
                     const prefPath = `ivr2:/Preferences/${ApiPhone}.txt`;
                     await yemot.uploadTextFile(prefPath, folderToSave);
                     
-                    yemotRes = `id_list_message=t-שלוחת_ברירת_המחדל_עודכנה_בהצלחה_תודה_ולהתראות.&go_to_folder=/`;
+                    yemotRes = `id_list_message=t-שלוחת ברירת המחדל עודכנה בהצלחה. תודה ולהתראות.&go_to_folder=/`;
                 } else {
-                    yemotRes = `id_list_message=t-תודה_ולהתראות.&go_to_folder=/`;
+                    yemotRes = `id_list_message=t-תודה ולהתראות.&go_to_folder=/`;
                 }
                 break;
 
@@ -283,6 +283,6 @@ module.exports = async function handler(req, res) {
     } catch (error) {
         console.error(`[IVR Critical Error] ${error.message}`, error);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.status(200).send(`id_list_message=t-אירעה_שגיאה_במערכת_ההמרה_אנו_מתנצלים.&go_to_folder=/`);
+        res.status(200).send(`id_list_message=t-אירעה שגיאה במערכת ההמרה אנו מתנצלים.&go_to_folder=/`);
     }
 };
