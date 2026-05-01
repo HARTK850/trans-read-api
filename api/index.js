@@ -14,7 +14,12 @@ const GEMINI_API_KEYS = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEY
     "YOUR_GEMINI_API_KEY_2"
 ];
 
-const YEMOT_TOKEN = process.env.YEMOT_TOKEN || "0770000000:123456"; // מספר מערכת וסיסמה
+const YEMOT_TOKEN = query.yemot_token; // מקבל את הטוקן ישירות מהגדרות השלוחה
+if (!YEMOT_TOKEN) {
+    console.error("חסר טוקן של ימות המשיח בבקשה!");
+}
+const yemot = new YemotManager(YEMOT_TOKEN);
+
 
 // בניית המנהלים
 const gemini = new GeminiManager(GEMINI_API_KEYS);
