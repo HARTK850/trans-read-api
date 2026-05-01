@@ -1,0 +1,12 @@
+{
+  "name": "yemot-gemini-ivr",
+  "version": "1.0.0",
+  "description": "IVR system powered by Gemini API for Yemot HaMashiach",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node api/index.js"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
