@@ -216,27 +216,37 @@ class YemotBuilder {
      */
 // בתוך class YemotBuilder, תחליף את פונקציית build:
 build() {
-    let res = "";
-    // מחבר את כל חלקי הטקסט עם נקודה ביניהם
-    const textPart = this.contentBlocks.join('.');
+        let res = "";
+        // מחבר את כל חלקי הטקסט/קבצים עם נקודה ביניהם (הפורמט הנדרש)
+        const textPart = this.contentBlocks.join('.');
 
-    if (this.action === "read" && this.readConfig) {
-        // פורמט תקין לימות המשיח: read=טקסט=שם_הערך,הגדרות,סוג,מינימום,מקסימום...
-        const { name, type, min, max, timeout } = this.readConfig;
-        res = `read=${textPart}=${name},no,${type},${min},${max},${timeout},No,yes,yes`;
-    } else if (this.action === "id_list_message") {
-        res = `id_list_message=${textPart}`;
-    } else {
-        res = `${this.action}=${textPart}`;
-    }
+        if (this.action === "read") {
+            // מחבר את 15 הפרמטרים שנוצרו ב-setReadDigitsAdvanced עם פסיקים
+            const paramsPart = this.params.length > 0 ? this.params.join(',') : "";
+            // שימוש ב- '=' במקום '^' ובפסיקים במקום '>'
+            res = `read=${textPart}=${paramsPart}`;
+        } else if (this.action === "id_list_message") {
+            res = `id_list_message=${textPart}`;
+        } else if (this.action === "go_to_folder") {
+            res = `go_to_folder=${this.goToFolder || "/"}`;
+        } else {
+            res = `${this.action}=${textPart}`;
+        }
 
-    // הוספת ה-State (פרמטרים נוספים) בצורה תקינה
-    let i = 0;
-    for (const [key, value] of Object.entries(this.nextState)) {
-        res += `&api_add_${i}=${key}=${encodeURIComponent(value)}`;
-        i++;
-    }
-    return res;
+        // הוספת משתני ה-State (כדי שהשרת יזכור באיזה שלב אנחנו)
+        // שימוש ב- '&' במקום '*' כפי שנדרש ב-API
+        let i = 0;
+        for (const [key, value] of Object.entries(this.nextState)) {
+            res += `&api_add_${i}=${key}=${encodeURIComponent(value)}`;
+            i++;
+        }
+
+        // אם הגדרת לאן לעבור בסיום הפעולה
+        if (this.goToFolder && this.action !== "go_to_folder" && this.action !== "read") {
+            res += `&go_to_folder=${this.goToFolder}`;
+        }
+
+        return res;
     }
 }
 
@@ -454,7 +464,8 @@ async function handleIvrFlow(query, yemot, ApiPhone, ApiCallId, YEMOT_TOKEN) {
                 .addText("האם תרצו לשמור את השלוחה שהקשתם כשלוחת ברירת המחדל שלכם להקלטות הבאות")
                 .addText("לאישור הקישו 1, לביטול הקישו 2")
                 // AskNo=true מופעל
-                .setReadDigitsAdvanced("SetDefaultChoice", 1, 1, 10, true, false, false, false)
+                // שנה את השורה הזו:
+                .setReadDigitsAdvanced("SetDefaultChoice", 1, 1, 10) // מינימום 1, מקסימום 1
                 .addState("savedFolder", cleanTargetFolder)
                 .addState("yemot_token", YEMOT_TOKEN);
             break;
