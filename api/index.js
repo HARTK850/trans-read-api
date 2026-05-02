@@ -1,36 +1,35 @@
 /**
  * @file api/index.js
- * @description נקודת הכניסה (Serverless Endpoint) למערכת ה-IVR החכמה לתמלול והקראה.
- * מנהל את ה-State Machine ללא משתנים נסתרים. 
- * מותאם לחווית משתמש (UX) חלקה: תפריט הקלטה מלא, ביטול אישורי "הקישו 1" וניגון מוזיקה בזמן יצירת הקול.
+ * @description מנהל השלבים (State Machine) של ה-IVR עבור Vercel Serverless.
+ * מספק חווית משתמש רציפה (UX): מקריא "אפס אחד", מאפשר תפריט הקלטה מלא, מאפשר מקש "0", 
+ * ומתקדם מיידית בלי ה"לאישור הקישו 1" המעיק.
  */
 
 const { GeminiManager, YemotManager, GEMINI_VOICES } = require('./core');
 
 // ============================================================================
-// 1. קונפיגורציה והגדרות מערכת גלובליות
+// הגדרות סביבה וקונפיגורציה
 // ============================================================================
 const GEMINI_API_KEYS = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEYS.split(',') :[
     "YOUR_GEMINI_API_KEY_1"
 ];
-
 const gemini = new GeminiManager(GEMINI_API_KEYS);
 const TEMP_FOLDER = "/Temp_Gemini_App"; 
 
 // ============================================================================
-// 2. מנוע אובייקט-אוריינטד ליצירת תחביר ימות המשיח (YemotBuilder)
+// מנוע אובייקט-אוריינטד ליצירת תחביר ימות המשיח (YemotBuilder)
 // ============================================================================
 class YemotBuilder {
     constructor(action) {
-        this.action = action; 
-        this.contentBlocks =[];
+        this.action = action; // לרוב 'read' או 'id_list_message'
+        this.contentBlocks = [];
         this.params =[];
         this.nextState = {};
         this.goToFolder = null; 
     }
 
     cleanYemotText(text) {
-        return text.replace(/[-.(),]/g, "");
+        return text.replace(/[-.(),]/g, ""); // מנקה תווים מסוכנים לימות המשיח
     }
 
     addText(text) {
@@ -45,26 +44,27 @@ class YemotBuilder {
     }
 
     /**
-     * הגדרת מאפייני בקשת קלט מספרים.
-     * הערך השביעי 'No' מבטל לחלוטין את "לאישור הקישו 1".
+     * הגדרת קלט מסוג Digits (ללא אישור "הקישו 1").
+     * מאפשר הקשת אפס! (BlockZero=no)
      */
     setReadConfig(varName, maxDigits, minDigits, timeout) {
         this.params =[
             varName, 
-            "no",           
-            "Digits",           
-            maxDigits, 
-            minDigits, 
-            timeout, 
-            "No", // ביטול Playback להקשות ("לאישור הקישו 1")
-            "yes" // חסימת מקש כוכבית
+            "no",           // לא להשתמש בקיים
+            "Digits",       // סוג קלט
+            maxDigits || "",// מקסימום (ריק = ללא הגבלה)
+            minDigits || "1",// מינימום
+            timeout || "10",// טיימאאוט בשניות
+            "No",           // *** ביטול Playback (מעלים את 'לאישור הקישו 1') ***
+            "yes",          // חסימת כוכבית
+            "no"            // *** מתיר שימוש בספרה 0 ***
         ];
         return this;
     }
 
     /**
-     * הגדרת מאפייני בקשת הקלטה.
-     * הערך השישי 'no' מבטל אישור אוטומטי, ובכך מחזיר את תפריט ההקלטה המלא של ימות המשיח!
+     * הגדרת בקשת הקלטה.
+     * מפעיל את תפריט ההקלטה המלא של ימות המשיח (1 לשמיעה, 2 לאישור, 3 מחדש, 5 המשך).
      */
     setRecordConfig(varName, folder, fileName, minSec, maxSec) {
         this.params =[
@@ -73,11 +73,11 @@ class YemotBuilder {
             "record",
             folder,
             fileName,
-            "no",  // no = הפעלת התפריט המלא של ימות (1 לשמיעה, 2 לאישור, 3 להקלטה מחדש...)
+            "no",  // *** no = הפעלת התפריט המלא של ימות! ***
             "yes", // שמירה בניתוק
             "no",  // לא לשרשר לקובץ קודם
-            minSec,
-            maxSec
+            minSec || "2",
+            maxSec || "120"
         ];
         return this;
     }
@@ -118,36 +118,34 @@ class YemotBuilder {
 }
 
 // ============================================================================
-// 3. הליבה: Serverless Request Handler
+// הליבה: Serverless Request Handler
 // ============================================================================
 
 module.exports = async function handler(req, res) {
     const query = req.method === 'POST' ? { ...req.query, ...req.body } : req.query;
 
-    // עצירת פעולה אם הלקוח סגר את הטלפון, מונע לולאות
+    // הגנת נטישה: אם הלקוח ניתק, אנו מפסיקים מיד את הפעולה ומונעים לולאות.
     if (query.hangup === "yes") {
-        console.log(`[Hangup Event] שיחה נותקה. (CallID: ${query.ApiCallId})`);
+        console.log(`[Hangup Event] שיחה נותקה. מזהה: ${query.ApiCallId}`);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         return res.status(200).send(""); 
     }
 
     const YEMOT_TOKEN = query.yemot_token;
     if (!YEMOT_TOKEN) {
-        console.error("[Fatal Error] חסר טוקן גישה מימות המשיח!");
+        console.error("[Fatal Error] חסר טוקן גישה של ימות המשיח!");
     }
     const yemot = new YemotManager(YEMOT_TOKEN);
 
     const ApiPhone = query.ApiPhone || "UnknownPhone";
     const ApiCallId = query.ApiCallId || "UnknownCallID";
     
-    // ניהול שלבים (State Machine) המבוסס על סריקת המשתנים מהבקשה.
+    // ניהול שלבים (State Machine) המבוסס על הנתונים שהצטברו בבקשה
     let state = 0;
-    if (query.SetDefaultChoice) state = 9;
-    else if (query.TargetFolderCopy) state = 85; 
-    else if (query.TargetFolderDefault) state = 8;
-    else if (query.UserChoiceAdditionalSave) state = 7;
-    else if (query.CustomStyleRecord) state = 5;
-    else if (query.StyleChoice) state = 4;
+    if (query.SetDefaultChoice) state = 6;
+    else if (query.TargetFolderCopy) state = 55; // שלב מיוחד לעותק נוסף
+    else if (query.TargetFolderDefault) state = 5;
+    else if (query.UserChoiceAdditionalSave) state = 4;
     else if (query.VoiceIndex) state = 3;
     else if (query.VoiceGender) state = 2;
     else if (query.UserAudioRecord) state = 1;
@@ -161,7 +159,7 @@ module.exports = async function handler(req, res) {
         switch (state) {
             case 0:
                 // ====================================================================
-                // שלב 0: פתיח המערכת ובקשת הקלטה. הלקוח יקבל תפריט ימות מלא!
+                // שלב 0: פתיח המערכת ובקשת הקלטה מהמשתמש. (תפריט ימות מלא)
                 // ====================================================================
                 responseBuilder = new YemotBuilder("read")
                     .addText("ברוכים הבאים למערכת היצירה הקולית")
@@ -172,13 +170,15 @@ module.exports = async function handler(req, res) {
 
             case 1:
                 // ====================================================================
-                // שלב 1: עיבוד ההקלטה ובקשת מין הקול (בחירה של ספרה אחת בלבד!)
+                // שלב 1: STT חכם המזהה סגנון, ומעבר לבחירת גבר/אישה.
+                // * מודל התמלול מסוקרן לנתח את הטון ולהוסיף סוגריים עגולים.
                 // ====================================================================
                 const recordPath = `${TEMP_FOLDER}/${ApiCallId}_main.wav`;
                 const audioBuffer = await yemot.downloadFile(`ivr2:${recordPath}`);
                 
+                // ה-audioBuffer עובר עיבוד וניקוי רעשים בתוך הפונקציה
                 const transcribedText = await gemini.transcribeAudio(audioBuffer);
-                console.log(`[STT Success] טקסט שתומלל: ${transcribedText}`);
+                console.log(`[STT Success] טקסט שתומלל עם טון: ${transcribedText}`);
 
                 if (!transcribedText || transcribedText.length < 2) {
                     responseBuilder = new YemotBuilder("read")
@@ -188,86 +188,63 @@ module.exports = async function handler(req, res) {
                     break;
                 }
 
+                // שמירת הטקסט (כולל הוראות הבמאי) כדי למשוך אותו בהמשך
                 await yemot.uploadTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`, transcribedText);
 
                 responseBuilder = new YemotBuilder("read")
-                    .addText("הטקסט נקלט בהצלחה")
-                    .addText("לבחירת קול של גבר הקישו 1")
-                    .addText("לבחירת קול של אישה הקישו 2")
-                    .setReadConfig("VoiceGender", 1, 1, 10) // מאפשר ספרה 1 בלבד ומתקדם מיד
+                    .addText("הטקסט נותח ונקלט בהצלחה")
+                    .addText("לבחירת קול של גבר הקישו אפס אחד")
+                    .addText("לבחירת קול של אישה הקישו אפס שתיים")
+                    .setReadConfig("VoiceGender", 2, 2, 10) // מחייב להקיש 01 או 02
                     .addState("yemot_token", YEMOT_TOKEN);
                 break;
 
             case 2:
                 // ====================================================================
-                // שלב 2: תפריט הקולות (דורש עד 2 ספרות כי יש 15 קולות)
+                // שלב 2: תפריט הקולות הייעודי (15 קולות) שמקריא "אפס אחד".
                 // ====================================================================
-                const isMale = query.VoiceGender === "1";
+                const isMale = query.VoiceGender === "01";
                 const voices = isMale ? GEMINI_VOICES.MALE : GEMINI_VOICES.FEMALE;
                 
                 responseBuilder = new YemotBuilder("read").addText("אנא בחרו את הקול הרצוי");
                 
                 for (let i = 0; i < voices.length; i++) {
-                    // המערכת פשוט מקריאה "הקישו 1", "הקישו 15". בלי אפס מוביל.
-                    responseBuilder.addText(`ל${voices[i].desc} הקישו ${i + 1}`);
+                    const num = i + 1;
+                    // ימות המשיח לא יודעת להקריא "01" יפה, לכן אנחנו מאכילים אותה בכפית: "אפס אחד"
+                    let spokenNum = num < 10 ? `אפס ${num}` : `${num}`;
+                    responseBuilder.addText(`ל${voices[i].desc} הקישו ${spokenNum}`);
                 }
 
                 responseBuilder.addText("בסיום הקישו סולמית");
 
                 responseBuilder
-                    .setReadConfig("VoiceIndex", 2, 1, 15) // מאפשר מ-1 עד 2 ספרות.
+                    .setReadConfig("VoiceIndex", 2, 1, 15) // תומך ב 1 עד 2 ספרות (למשל: 5, 05, 12)
                     .addState("gender", isMale ? "MALE" : "FEMALE")
                     .addState("yemot_token", YEMOT_TOKEN);
                 break;
 
             case 3:
                 // ====================================================================
-                // שלב 3: בחירת הסגנון (ספרה אחת בלבד!)
+                // שלב 3: הלקוח בחר קול - יצירת ה-TTS באופן מיידי!
+                // *הערה: הוסר תפריט הסגנונות.* השרת ייעצר כאן לכמה שניות וימות תנגן מוזיקה!
                 // ====================================================================
                 const voiceList = query.gender === "MALE" ? GEMINI_VOICES.MALE : GEMINI_VOICES.FEMALE;
                 const voiceIndex = parseInt(query.VoiceIndex, 10) - 1;
                 
+                // הגנה במקרה של הקשת קול מחוץ לטווח
                 const selectedVoiceId = (voiceIndex >= 0 && voiceIndex < voiceList.length) ? voiceList[voiceIndex].id : voiceList[0].id;
 
-                responseBuilder = new YemotBuilder("read")
-                    .addText("לבחירת סגנון רגיל הקישו 1")
-                    .addText("לסגנון שמח ונלהב הקישו 2")
-                    .addText("לסגנון רציני הקישו 3")
-                    .addText("להגדרת סגנון מותאם אישית בהקלטה הקישו 4")
-                    .setReadConfig("StyleChoice", 1, 1, 10) // מאפשר ספרה אחת בלבד ומתקדם מיד
-                    .addState("voiceId", selectedVoiceId)
-                    .addState("yemot_token", YEMOT_TOKEN);
-                break;
-
-            case 4:
-                // ====================================================================
-                // שלב 4: פיצול הפקה (אם נבחר סגנון מובנה - ממתינים והמוזיקה מתנגנת!)
-                // ====================================================================
-                const styleChoice = query.StyleChoice;
-
-                if (styleChoice === "4") {
-                    responseBuilder = new YemotBuilder("read")
-                        .addText("אנא הקליטו את הנחיות הבמאי לסגנון ההקראה הרצוי ולאחר מכן הקישו סולמית")
-                        .setRecordConfig("CustomStyleRecord", TEMP_FOLDER, `${ApiCallId}_style`, 2, 60)
-                        .addState("voiceId", query.voiceId)
-                        .addState("yemot_token", YEMOT_TOKEN);
-                    break;
-                } 
-                
-                // --- מוזיקה בהמתנה מופעלת עכשיו! ---
-                // השרת נשאר פתוח ומחכה لج'מיני. ימות המשיח רואה שהשרת חושב, והיא תתחיל
-                // לנגן את ztomao כפי שהגדרת ב-ext.ini!
-                
-                let emotionCue = "";
-                if (styleChoice === "2") emotionCue = "Happy, upbeat, and very excited";
-                else if (styleChoice === "3") emotionCue = "Serious, dramatic, and formal";
-
+                // משיכת הטקסט עם ההוראות (מה שג'מיני יצר בשלב 1)
                 const mainText = await yemot.getTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`);
-                const ttsAudioBuffer = await gemini.generateTTS(mainText, query.voiceId, emotionCue);
                 
+                // יצירת האודיו מ-Gemini (ללא העברת System Instructions, רק הטקסט הגולמי)
+                const ttsAudioBuffer = await gemini.generateTTS(mainText, selectedVoiceId);
+                
+                // העלאה ושמירת הקובץ שהופק בתיקייה הזמנית בימות המשיח
                 const ttsTempPath = `ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`;
                 await yemot.uploadFile(ttsTempPath, ttsAudioBuffer);
 
+                // ניתוב לשמירה בהתאם להעדפות שמורות (האם הלקוח שמר שלוחת ברירת מחדל?)
                 const prefPath = `ivr2:/Preferences/${ApiPhone}.txt`;
                 const defaultFolder = await yemot.getTextFile(prefPath);
 
@@ -275,104 +252,85 @@ module.exports = async function handler(req, res) {
                     const folder = defaultFolder.trim();
                     const nextFileName = await yemot.getNextSequenceFileName(folder);
                     const finalPath = `ivr2:/${folder}/${nextFileName}.wav`;
+                    
                     await yemot.uploadFile(finalPath, ttsAudioBuffer);
 
                     responseBuilder = new YemotBuilder("read")
-                        .addFile(`${TEMP_FOLDER}/${ApiCallId}_tts`)
+                        .addFile(`${TEMP_FOLDER}/${ApiCallId}_tts`) // משמיע את הקובץ שהופק!
                         .addText("הקובץ הושמע ונשמר בהצלחה בשלוחה המועדפת")
-                        .addText("האם לשמור עותק במיקום נוסף לאישור הקישו 1 לביטול וחזרה הקישו 2")
-                        .setReadConfig("UserChoiceAdditionalSave", 1, 1, 15) // ספרה אחת
+                        .addText("האם לשמור עותק במיקום נוסף לאישור הקישו אפס אחד לביטול וחזרה הקישו אפס שתיים")
+                        .setReadConfig("UserChoiceAdditionalSave", 2, 2, 10) // מאלץ "01" או "02" לתגובה מיידית
                         .addState("yemot_token", YEMOT_TOKEN);
                 } else {
                     responseBuilder = new YemotBuilder("read")
                         .addFile(`${TEMP_FOLDER}/${ApiCallId}_tts`)
                         .addText("הקובץ הושמע בהצלחה")
                         .addText("הקישו את מספר השלוחה בה תרצו לשמור את הקובץ. לשמירה בתיקייה הראשית הקישו אפס. ובסיום הקישו סולמית")
-                        .setReadConfig("TargetFolderDefault", 15, 1, 15) // גמיש (שלוחה)
+                        .setReadConfig("TargetFolderDefault", "", 1, 15) // Max ריק, Min 1, הכל פתוח! גם אפס מותר.
                         .addState("yemot_token", YEMOT_TOKEN);
                 }
                 break;
 
-            case 5:
+            case 4:
                 // ====================================================================
-                // שלב 5: חזרה מהקלטת הסגנון האישי - גם כאן המוזיקה מתנגנת בזמן ההמתנה
+                // שלב 4: משתמש בעל שלוחת ברירת מחדל נשאל האם לשמור עותק נוסף
                 // ====================================================================
-                const styleBuffer = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_style.wav`);
-                const customEmotionCue = await gemini.transcribeAudio(styleBuffer);
-                const mainTextCustom = await yemot.getTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`);
-                
-                const customTTSBuffer = await gemini.generateTTS(mainTextCustom, query.voiceId, customEmotionCue);
-                await yemot.uploadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`, customTTSBuffer);
-
-                const prefPathCustom = `ivr2:/Preferences/${ApiPhone}.txt`;
-                const defaultFolderCustom = await yemot.getTextFile(prefPathCustom);
-
-                if (defaultFolderCustom && defaultFolderCustom.trim().length > 0) {
-                    const folder = defaultFolderCustom.trim();
-                    const nextFileName = await yemot.getNextSequenceFileName(folder);
-                    await yemot.uploadFile(`ivr2:/${folder}/${nextFileName}.wav`, customTTSBuffer);
-
-                    responseBuilder = new YemotBuilder("read")
-                        .addFile(`${TEMP_FOLDER}/${ApiCallId}_tts`)
-                        .addText("הקובץ הושמע ונשמר בהצלחה בשלוחה המועדפת")
-                        .addText("האם לשמור עותק במיקום נוסף לאישור הקישו 1 לביטול וחזרה הקישו 2")
-                        .setReadConfig("UserChoiceAdditionalSave", 1, 1, 15)
-                        .addState("yemot_token", YEMOT_TOKEN);
-                } else {
-                    responseBuilder = new YemotBuilder("read")
-                        .addFile(`${TEMP_FOLDER}/${ApiCallId}_tts`)
-                        .addText("הקובץ הושמע בהצלחה")
-                        .addText("הקישו את מספר השלוחה בה תרצו לשמור את הקובץ. לשמירה בתיקייה הראשית הקישו אפס. ובסיום הקישו סולמית")
-                        .setReadConfig("TargetFolderDefault", 15, 1, 15)
-                        .addState("yemot_token", YEMOT_TOKEN);
-                }
-                break;
-
-            case 7:
-                if (query.UserChoiceAdditionalSave === "1") {
+                if (query.UserChoiceAdditionalSave === "01") {
                     responseBuilder = new YemotBuilder("read")
                         .addText("הקישו את מספר השלוחה עבור העותק הנוסף ובסיום הקישו סולמית")
-                        .setReadConfig("TargetFolderCopy", 15, 1, 15)
+                        .setReadConfig("TargetFolderCopy", "", 1, 15) // הכל פתוח
                         .addState("yemot_token", YEMOT_TOKEN);
                 } else {
                     responseBuilder = new YemotBuilder("go_to_folder").addText("/");
                 }
                 break;
 
-            case 8:  
-            case 85: 
+            case 5:  // נתיב רגיל (אין ברירת מחדל)
+            case 55: // נתיב לעותק נוסף
+                // ====================================================================
+                // שלב 5 + 55: תיוק הקובץ בשלוחת היעד (ומאפשר שמירה לשורש "0")
+                // ====================================================================
                 let targetFolder = query.TargetFolderDefault || query.TargetFolderCopy;
-                if (!targetFolder || targetFolder === "") { 
+                
+                // הלקוח ניתק או הקיש סולמית בלבד
+                if (targetFolder === undefined) { 
                     responseBuilder = new YemotBuilder("go_to_folder").addText("/"); 
                     break; 
                 }
                 
-                // הלקוח הקיש 0 כדי לשמור בתיקייה הראשית
-                if (targetFolder === "0") targetFolder = "";
+                // אם המשתמש הקיש '0', אנחנו מאפסים את התיקייה כדי לשמור בתיקיית השורש
+                if (targetFolder === "0") {
+                    targetFolder = "";
+                }
                 
-                const cleanFolder = targetFolder.replace(/\*/g, "/");
+                const cleanFolder = targetFolder.replace(/\*/g, "/"); // מתרגם כוכביות לסלשים
                 const ttsForSave = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`);
                 const seqFileName = await yemot.getNextSequenceFileName(cleanFolder || "/");
                 
                 const uploadPath = cleanFolder ? `ivr2:/${cleanFolder}/${seqFileName}.wav` : `ivr2:/${seqFileName}.wav`;
                 await yemot.uploadFile(uploadPath, ttsForSave);
 
-                if (state === 85) { 
+                if (state === 55) { 
+                    // עותק נוסף - מסיים וחוזר לשורש
                     responseBuilder = new YemotBuilder("id_list_message")
                         .addText(`העותק נשמר בהצלחה כקובץ מספר ${seqFileName}`)
                         .addGoToFolder("/"); 
                 } else { 
+                    // פעם ראשונה ששומר - מציעים להפוך לברירת מחדל
                     responseBuilder = new YemotBuilder("read")
                         .addText(`הקובץ נשמר בהצלחה כקובץ מספר ${seqFileName}`)
-                        .addText("האם תרצו להגדיר שלוחה זו כברירת המחדל לשמירות הבאות. לאישור הקישו 1 לסיום הקישו 2")
-                        .setReadConfig("SetDefaultChoice", 1, 1, 10)
+                        .addText("האם תרצו להגדיר שלוחה זו כברירת המחדל לשמירות הבאות. לאישור הקישו אפס אחד לסיום הקישו אפס שתיים")
+                        .setReadConfig("SetDefaultChoice", 2, 2, 10)
                         .addState("targetFolder", cleanFolder)
                         .addState("yemot_token", YEMOT_TOKEN);
                 }
                 break;
 
-            case 9:
-                if (query.SetDefaultChoice === "1" && query.targetFolder !== undefined) {
+            case 6:
+                // ====================================================================
+                // שלב 6: עדכון מועדפים במסד הנתונים של ימות (קבצי txt) ופרידה
+                // ====================================================================
+                if (query.SetDefaultChoice === "01" && query.targetFolder !== undefined) {
                     await yemot.uploadTextFile(`ivr2:/Preferences/${ApiPhone}.txt`, query.targetFolder.replace(/\*/g, "/"));
                     responseBuilder = new YemotBuilder("id_list_message")
                         .addText("שלוחת ברירת המחדל עודכנה בהצלחה תודה ולהתראות")
