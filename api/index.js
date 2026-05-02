@@ -214,28 +214,29 @@ class YemotBuilder {
     /**
      * מחזיר את המחרוזת הסופית שמוכנה להישלח לימות המשיח
      */
-    build() {
-        let res = `${this.action}=`;
-        
-        if (this.contentBlocks.length > 0) {
-            res += this.contentBlocks.join('.');
-        }
+// בתוך class YemotBuilder, תחליף את פונקציית build:
+build() {
+    let res = "";
+    // מחבר את כל חלקי הטקסט עם נקודה ביניהם
+    const textPart = this.contentBlocks.join('.');
 
-        if (this.params.length > 0) {
-            res += "=" + this.params.join(',');
-        }
+    if (this.action === "read" && this.readConfig) {
+        // פורמט תקין לימות המשיח: read=טקסט=שם_הערך,הגדרות,סוג,מינימום,מקסימום...
+        const { name, type, min, max, timeout } = this.readConfig;
+        res = `read=${textPart}=${name},no,${type},${min},${max},${timeout},No,yes,yes`;
+    } else if (this.action === "id_list_message") {
+        res = `id_list_message=${textPart}`;
+    } else {
+        res = `${this.action}=${textPart}`;
+    }
 
-        let index = 0;
-        for (const [key, value] of Object.entries(this.nextState)) {
-            res += `&api_add_${index}=${key}=${encodeURIComponent(value)}`;
-            index++;
-        }
-
-        if (this.goToFolder) {
-            res += `&go_to_folder=${this.goToFolder}`;
-        }
-
-        return res;
+    // הוספת ה-State (פרמטרים נוספים) בצורה תקינה
+    let i = 0;
+    for (const [key, value] of Object.entries(this.nextState)) {
+        res += `&api_add_${i}=${key}=${encodeURIComponent(value)}`;
+        i++;
+    }
+    return res;
     }
 }
 
@@ -461,28 +462,36 @@ async function handleIvrFlow(query, yemot, ApiPhone, ApiCallId, YEMOT_TOKEN) {
         // --------------------------------------------------------------------
         // שלב 8: שלב ביניים למי שיש לו כבר ברירת מחדל - האם לשמור עותק נוסף?
         // --------------------------------------------------------------------
-        case 8:
-            if (query.WantCopySave === "1") {
-                responseBuilder = new YemotBuilder("read")
-                    .addText("נא הקישו את מספר השלוחה עבור העותק הנוסף ובסיום סולמית")
-                    .addText("לשמירה בתיקייה הראשית הקישו אפס וסולמית")
-                    // ממיר כוכביות לסלשים אוטומטית (autoReplaceAsteriskWithSlash=true)
-                    .setReadDigitsAdvanced("TargetFolderCopy", 20, 1, 15, true, true, true, true)
-                    .addState("yemot_token", YEMOT_TOKEN);
-            } else {
-                responseBuilder = new YemotBuilder("go_to_folder").addText("/");
-            }
-            break;
+        // תיקון שלב 8 (הקשת שלוחה לשמירה)
+case 8:
+    const cleanFolder = query.targetFolder ? query.targetFolder.replace(/[\/\\*]/g, '*') : "";
+    if (!cleanFolder) {
+        responseBuilder = new YemotBuilder("read")
+            .addText("לא הוקשה שלוחה תקינה אנא הקישו את מספר השלוחה ובסיום סולמית")
+            .setReadConfig("targetFolder", "Digits", 1, 10, 10) // מינימום 1, מקסימום 10
+            .addState("state", 8);
+    } else {
+        // כאן מתבצע הטיפול בשמירה (הקוד הקיים שלך...)
+        // ... ודא שבמעבר לשלב 9 אתה משתמש בזה:
+        responseBuilder = new YemotBuilder("read")
+            .addText("האם תרצו להגדיר שלוחה זו כברירת מחדל לאישור הקישו אחת לסיום הקישו שתיים")
+            .setReadConfig("SetDefaultChoice", "Digits", 1, 1, 10) // שיניתי למינימום 1!
+            .addState("state", 9)
+            .addState("targetFolder", cleanFolder);
+    }
+    break;
 
-        // --------------------------------------------------------------------
-        // שלב 9: שמירת עותק נוסף
-        // --------------------------------------------------------------------
-        case 9:
-            const rawCopyFolder = query.TargetFolderCopy;
-            if (rawCopyFolder === undefined) { 
-                responseBuilder = new YemotBuilder("go_to_folder").addText("/"); 
-                break; 
-            }
+// תיקון שלב 9 (בדיקת בחירה)
+case 9:
+    // שינוי הבדיקה מ-"01" ל-"1"
+    if (query.SetDefaultChoice === "1" && query.targetFolder) {
+        await yemot.uploadTextFile(`ivr2:/Preferences/${ApiPhone}.txt`, query.targetFolder.replace(/\*/g, "/"));
+        responseBuilder = new YemotBuilder("id_list_message").addText("שלוחת ברירת המחדל עודכנה בהצלחה תודה ולהתראות");
+    } else {
+        responseBuilder = new YemotBuilder("id_list_message").addText("תודה ולהתראות");
+    }
+    yemotRes = responseBuilder.build() + "&go_to_folder=/";
+    break;
 
             const cleanCopyFolder = sanitizeFolderPath(rawCopyFolder);
             const ttsForCopy = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`);
