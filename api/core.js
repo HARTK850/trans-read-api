@@ -1,13 +1,14 @@
 /**
  * @file api/core.js
- * @version 12.5.0 Enterprise Ultimate Edition
+ * @version 15.0.0 Ultimate Enterprise Edition
  * @description תשתית ליבה (Core Infrastructure) למערכת IVR מבוססת AI.
  * קובץ זה תוכנן לארכיטקטורת Large-Scale וכולל:
- * 1. מנוע עיבוד שמע (DSP) לניקוי רעשים סטטיים מהטלפון.
- * 2. מנוע קידוד בינארי (WavEncoder) לתיקון כותרות קבצים.
- * 3. ניהול רשת עצמאי מבוסס Promise ללא תלויות חיצוניות (Zero-Dependency).
- * 4. מנגנון Exponential Backoff & Circuit Breaker להגנה מפני קריסות שרת.
- * 5. טלמטריה ולוגים חכמים.
+ * 1. מנוע עיבוד שמע (DSP) לניקוי רעשים סטטיים.
+ * 2. מנוע קידוד בינארי (WavEncoder) לתיקון כותרות קבצים מג'מיני.
+ * 3. ניהול רשת מבוסס Promise ללא תלויות חיצוניות.
+ * 4. מנגנון Exponential Backoff & Circuit Breaker.
+ * 5. טלמטריה ולוגים מובנים לבקרת איכות.
+ * 6. מאגר רחב של קולות Gemini (60 קולות שונים).
  */
 
 const https = require('https');
@@ -16,22 +17,28 @@ const crypto = require('crypto');
 // ============================================================================
 // [1] מערכת לוגים וטלמטריה (Enterprise Telemetry & Logging)
 // ============================================================================
+/**
+ * מחלקה האחראית על רישום אירועים במערכת (Logging)
+ * מסייעת בניטור בקשות, שגיאות, ומעקב אחרי מסלולי משתמשים.
+ */
 class TelemetryLogger {
     static info(module, action, message) {
         const timestamp = new Date().toISOString();
-        console.log(`[${timestamp}] [INFO] [${module}] [${action}] => ${message}`);
+        console.log(`[${timestamp}] [INFO][${module}] [${action}] => ${message}`);
     }
 
     static warn(module, action, message) {
         const timestamp = new Date().toISOString();
-        console.warn(`[${timestamp}] [WARN] [${module}] [${action}] => ${message}`);
+        console.warn(`[${timestamp}][WARN] [${module}] [${action}] => ${message}`);
     }
 
     static error(module, action, message, err = null) {
         const timestamp = new Date().toISOString();
         console.error(`[${timestamp}] [ERROR] [${module}][${action}] => ${message}`);
-        if (err) {
-            console.error(err.stack || err.message || err);
+        if (err && err.stack) {
+            console.error(err.stack);
+        } else if (err) {
+            console.error(err);
         }
     }
 
@@ -41,7 +48,7 @@ class TelemetryLogger {
 
     static endTimer(module, action, startTime) {
         const duration = Date.now() - startTime;
-        console.log(`[METRIC] [${module}] [${action}] completed in ${duration}ms`);
+        console.log(`[METRIC] [${module}][${action}] completed in ${duration}ms`);
         return duration;
     }
 }
@@ -49,6 +56,10 @@ class TelemetryLogger {
 // ============================================================================
 // [2] מאגר קולות נרחב (Gemini TTS Voice Registry)
 // ============================================================================
+/**
+ * מסד נתונים של קולות Gemini הזמינים.
+ * מחולק לזכרים ונקבות, כדי לאפשר למערכת לייצר תפריטים דינמיים וברורים.
+ */
 const GEMINI_VOICES = {
     MALE:[
         { id: "Puck", desc: "קול גברי קצבי ושמח" },
@@ -97,7 +108,7 @@ const GEMINI_VOICES = {
 };
 
 // ============================================================================
-//[3] מערך שגיאות מותאם אישית (Custom Error Classes)
+// [3] מערך שגיאות מותאם אישית (Custom Error Classes)
 // ============================================================================
 class IvrInternalError extends Error {
     constructor(message) { super(message); this.name = "IvrInternalError"; }
@@ -156,6 +167,7 @@ class WavEncoder {
             header.writeUInt32LE(36 + pcmBuffer.length, 4);
             // Format "WAVE"
             header.write('WAVE', 8);
+            
             // Subchunk1ID "fmt "
             header.write('fmt ', 12);
             // Subchunk1Size (16 for PCM)
@@ -172,6 +184,7 @@ class WavEncoder {
             header.writeUInt16LE(numChannels * (bitsPerSample / 8), 32);
             // BitsPerSample
             header.writeUInt16LE(bitsPerSample, 34);
+            
             // Subchunk2ID "data"
             header.write('data', 36);
             // Subchunk2Size
@@ -189,7 +202,8 @@ class WavEncoder {
 
 /**
  * מחלקת AudioProcessor
- * פותרת את בעיית עוצמת השמע הנמוכה ורעשי הרקע בהקלטות טלפוניות מימות המשיח.
+ * מטפלת באיכות ההקלטות הטלפוניות לפני שליחתן לתמלול בג'מיני.
+ * מכילה Noise Gate לסינון רעשים סטטיים ו-Dynamic Gain Amplifier.
  */
 class AudioProcessor {
     /**
@@ -286,8 +300,7 @@ class HttpClient {
 class RetryHandler {
     /**
      * מפעיל פונקציה מחדש במקרה של שגיאות תעבורה (Rate Limit 429 או שגיאות שרת 5xx).
-     * @param {Function} fn - הפונקציה האסינכרונית לביצוע
-     * @param {number} maxRetries - כמות ניסיונות מקסימלית
+     * מיועד במיוחד לייצוב התקשורת מול גוגל וימות המשיח.
      */
     static async executeWithBackoff(fn, maxRetries = 3) {
         let retries = 0;
@@ -316,16 +329,19 @@ class RetryHandler {
 // [7] מחלקת תקשורת מתקדמת מול Gemini AI (STT & TTS)
 // ============================================================================
 class GeminiManager {
+    /**
+     * @param {string[]} apiKeys - מערך של מפתחות API (מתומך בעבודה עם מספר מפתחות ל-Load Balancing)
+     */
     constructor(apiKeys) {
         if (!apiKeys || apiKeys.length === 0) {
-            throw new Error("Missing Gemini API Keys in Environment Variables.");
+            throw new GeminiApiError("Missing Gemini API Keys.");
         }
         this.keys = apiKeys;
         this.currentIndex = 0;
     }
 
     /**
-     * חלוקת עומסים עגולה (Round Robin) בין המפתחות הזמינים למניעת חסימות.
+     * חלוקת עומסים עגולה (Round Robin) בין המפתחות הזמינים
      */
     _getRotateKey() {
         const key = this.keys[this.currentIndex];
@@ -334,10 +350,11 @@ class GeminiManager {
     }
 
     /**
-     * STT חכם (Speech to Text) עם אנליזת סגנון ורגש.
-     * המודל מתבקש לתמלל ומיד להוסיף הערת במאי בסוגריים עגולים שתשפיע על שלב ה-TTS.
+     * STT חכם (Speech to Text)
+     * כאן הוטמעה התכונה המיוחדת! מודל ה-STT מתבקש לנתח את טון הדיבור 
+     * ולהוסיף בתחילת התמלול הנחיות במאי בסוגריים עגולים או מרובעים.
      * @param {Buffer} audioBuffer - קובץ השמע מהמאזין
-     * @returns {Promise<string>} הטקסט המתומלל עם הערות הבמאי
+     * @returns {Promise<string>} הטקסט המתומלל עם הערות הבמאי באנגלית
      */
     async transcribeAudioWithEmotion(audioBuffer) {
         TelemetryLogger.info("GeminiManager", "transcribeAudioWithEmotion", "פתיחת תהליך תמלול וזיהוי רגש...");
@@ -351,8 +368,8 @@ class GeminiManager {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${this._getRotateKey()}`;
             const options = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
             
-            // פרומפט מיוחד: תמלול + הסקת טון דיבור בתוך סוגריים עגולים
-            const prompt = "אתה מערכת לתמלול חכמה. המטרה שלך היא לתמלל את קובץ האודיו הבא לעברית. אך בנוסף, עליך לזהות מהטון של הדובר את הרגש או סגנון הדיבור שלו. הוסף בתחילת הטקסט שתתמלל, או לפני משפטים בולטים, הנחיית במאי בתוך סוגריים עגולים. למשל: '(בקול שמח ונרגש) בוקר טוב!'. או: '(בקול רציני וכועס) אני לא מסכים'. החזר אך ורק את הטקסט הסופי עם הסוגריים העגולים, ללא שום מילת הקדמה, מרכאות או הסבר נוסף שלך.";
+            // פקודה כפולה למודל: תמלל לעברית + הוסף תגית באנגלית בהתחלה המתארת את הרגש
+            const prompt = "You are a smart transcription and emotion analysis system. Task 1: Transcribe the following Hebrew audio accurately. Task 2: Analyze the speaker's tone of voice and emotion. Precede the Hebrew text with an ENGLISH emotion tag in square brackets, describing the tone. For example: '[Excited and happy tone] שלום לכולם!'. Return ONLY the bracketed tag and the Hebrew text, without any quotes or explanations.";
             
             const postData = JSON.stringify({
                 contents: [{
@@ -373,25 +390,27 @@ class GeminiManager {
         if (result && result.candidates && result.candidates[0].content.parts[0].text) {
             return result.candidates[0].content.parts[0].text.trim();
         }
-        throw new GeminiApiError("Invalid STT response structure from Gemini.", 200, JSON.stringify(result));
+        throw new GeminiApiError("Gemini returned an invalid STT response structure.", 200, JSON.stringify(result));
     }
 
     /**
-     * TTS (Text to Speech)
-     * מודל ה-TTS מקבל את הטקסט המעושר בסוגריים ומפיק ממנו אודיו.
-     * @param {string} textWithEmotions - הטקסט להקראה
-     * @param {string} voiceName - מזהה הקול
-     * @returns {Promise<Buffer>} קובץ WAV תקין ומוכן להשמעה
+     * TTS חכם (Text to Speech)
+     * מודל ה-TTS מקבל את הטקסט העשיר שכולל את תגית הרגש באנגלית,
+     * וכך משנה את טון ההקראה מבלי להקריא את התגית עצמה!
+     * @param {string} textWithEmotions - הטקסט הכולל את תגית הרגש באנגלית
+     * @param {string} voiceName - מזהה הקול של ג'מיני (למשל 'Puck', 'Kore')
+     * @returns {Promise<Buffer>} קובץ WAV תקין ומוכן להשמעה בימות המשיח
      */
     async generateTTS(textWithEmotions, voiceName) {
-        TelemetryLogger.info("GeminiManager", "generateTTS", `מפיק הקראה בקול '${voiceName}'...`);
+        TelemetryLogger.info("GeminiManager", "generateTTS", `מפיק הקראה בקול '${voiceName}'. טקסט: ${textWithEmotions.substring(0, 30)}...`);
         const timer = TelemetryLogger.startTimer();
         
         const operation = async () => {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${this._getRotateKey()}`;
             const options = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
             
-            // שימוש מדויק במאפיין generationConfig בלבד (ללא systemInstruction שגורם לקריסה)
+            // אין יותר שימוש ב-systemInstruction שגורם לקריסות 400.
+            // אנו מעבירים אך ורק את ה-generationConfig כנדרש.
             const payload = {
                 contents:[{ parts: [{ text: textWithEmotions }] }],
                 generationConfig: {
@@ -413,7 +432,7 @@ class GeminiManager {
         
         try {
             const base64Data = result.candidates[0].content.parts[0].inlineData.data;
-            // קידוד מחדש של הנתונים כדי להבטיח תקינות קובץ WAV עבור ימות המשיח
+            // כאן מתבצע הקסם של תיקון הקובץ והלבשת ה-Header!
             return WavEncoder.encodeFromBase64(base64Data, 24000);
         } catch (e) {
             TelemetryLogger.error("GeminiManager", "generateTTS", "שגיאה בפענוח נתוני האודיו מג'מיני", JSON.stringify(result));
@@ -432,6 +451,9 @@ class YemotManager {
         this.baseUrl = 'www.call2all.co.il';
     }
 
+    /**
+     * מוריד קובץ פיזי משרתי ימות המשיח
+     */
     async downloadFile(path) {
         TelemetryLogger.info("YemotManager", "downloadFile", `מוריד מנתיב: ${path}`);
         const url = `https://${this.baseUrl}/ym/api/DownloadFile?token=${this.token}&path=${encodeURIComponent(path)}`;
@@ -439,6 +461,9 @@ class YemotManager {
         return response.body;
     }
 
+    /**
+     * בניית מבנה Multipart/form-data להעלאת קבצים בינאריים למערכת הטלפונית
+     */
     _buildMultipartPayload(boundary, path, fileBuffer, fileName = "file.wav") {
         const crlf = "\r\n";
         let payload = Buffer.alloc(0);
@@ -453,8 +478,11 @@ class YemotManager {
         return payload;
     }
 
+    /**
+     * מעלה קובץ שמע לשרתי ימות המשיח
+     */
     async uploadFile(path, buffer) {
-        TelemetryLogger.info("YemotManager", "uploadFile", `מעלה קובץ שמע לנתיב: ${path}`);
+        TelemetryLogger.info("YemotManager", "uploadFile", `מעלה קובץ אודיו לנתיב: ${path}`);
         const boundary = '----YemotDataBoundary' + crypto.randomBytes(16).toString('hex');
         const payload = this._buildMultipartPayload(boundary, path, buffer);
 
@@ -474,6 +502,9 @@ class YemotManager {
         return resJson;
     }
 
+    /**
+     * מעלה קובץ טקסט למסד הנתונים מבוסס-הקבצים של ימות המשיח
+     */
     async uploadTextFile(path, text) {
         TelemetryLogger.info("YemotManager", "uploadTextFile", `שומר טקסט בנתיב: ${path}`);
         const url = `https://${this.baseUrl}/ym/api/UploadTextFile?token=${this.token}`;
@@ -489,21 +520,25 @@ class YemotManager {
         return JSON.parse(response.body.toString('utf8'));
     }
 
+    /**
+     * שולף קובץ טקסט מימות המשיח (למשל משיכת העדפות משתמש קודמות)
+     */
     async getTextFile(path) {
         try {
             const buffer = await this.downloadFile(path);
             return buffer.toString('utf8');
         } catch (e) {
-            if (e.statusCode === 404) return null; 
+            if (e.statusCode === 404) return null; // הגיוני אם אין עדיין קובץ למשתמש
             throw e;
         }
     }
 
     /**
-     * סריקת תיקייה לאיתור הקובץ הפנוי הבא בתור (מספור אוטומטי עוקב).
+     * אלגוריתם המספור הסידורי. סורק את התיקייה ומוצא את השם הבא הפנוי (למשל מ-004 ל-005).
      */
     async getNextSequenceFileName(folderPath) {
         TelemetryLogger.info("YemotManager", "getNextSequenceFileName", `מחפש מספר פנוי בתיקייה: ${folderPath}`);
+        // ימות המשיח דורשת '/' אם זו תיקיית השורש.
         const cleanPath = (folderPath === "" || folderPath === "/") ? "/" : folderPath;
         const url = `https://${this.baseUrl}/ym/api/GetIVR2Dir?token=${this.token}&path=${encodeURIComponent(cleanPath)}`;
         
@@ -514,6 +549,7 @@ class YemotManager {
 
             let maxNum = -1;
             for (const file of data.files) {
+                // מתעלם מקבצים שאינם במבנה מספר טהור של 3 ספרות עם סיומות מוכרות
                 const match = file.name.match(/^(\d{3})\.(wav|mp3|ogg|tts)$/);
                 if (match) {
                     const num = parseInt(match[1], 10);
