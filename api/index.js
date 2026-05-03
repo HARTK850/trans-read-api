@@ -65,22 +65,26 @@ class YemotCommandBuilder {
      * בונה מערך מדויק של 15 פרמטרים כפי שדורשת ימות המשיח.
      */
     setReadDigitsAdvanced(varName, maxDigits, minDigits, timeout, disableConfirmation = true, allowZero = true, allowAsterisk = true) {
+        // שים לב: שינינו את ברירת המחדל ל-true עבור אפס וכוכבית
+        const blockAsterisk = allowAsterisk ? "no" : "yes";
+        const blockZero = allowZero ? "no" : "yes"; 
+
         this.params = [
-            varName,                            // 1. שם המשתנה
-            "no",                               // 2. האם להשתמש בקיים
-            "Digits",                           // 3. סוג הקלט
-            maxDigits.toString(),               // 4. מקסימום ספרות
-            minDigits.toString(),               // 5. מינימום ספרות
-            timeout.toString(),                 // 6. זמן המתנה בין ספרות
-            "Digits",                           // 7. צורת השמעה (שינינו מ-No ל-Digits ליציבות)
-            allowAsterisk ? "no" : "yes",       // 8. האם לחסום כוכבית (no = לא לחסום)
-            allowZero ? "no" : "yes",           // 9. האם לחסום אפס (no = לא לחסום)
-            "no",                               // 10. החלפת תווים
-            "",                                 // 11. מקשים מורשים
-            "3",                                // 12. מספר ניסיונות (מונע את הודעת השגיאה המיידית)
-            "no",                               // 13. המשך אם ריק
-            "",                                 // 14. מודל מקלדת
-            disableConfirmation ? "no" : "yes"  // 15. "לאישור הקישו 1" (no = מבטל)
+            varName,               // 1
+            "no",                  // 2
+            "Digits",              // 3
+            maxDigits.toString(),  // 4
+            minDigits.toString(),  // 5
+            timeout.toString(),    // 6
+            "Digits",              // 7. שינוי מ-No ל-Digits (קריטי!)
+            blockAsterisk,         // 8
+            blockZero,             // 9
+            "no",                  // 10. שינוי מריק ל-"no"
+            "",                    // 11
+            "3",                   // 12. הוספת 3 ניסיונות (קריטי למניעת "בחירה לא חוקית")
+            "no",                  // 13
+            "",                    // 14
+            disableConfirmation ? "no" : "yes" // 15
         ];
         return this;
     }
@@ -296,7 +300,7 @@ module.exports = async (req, res) => {
                     .addText("הטקסט נותח ונקלט בהצלחה")
                     .addText("לבחירת קול קריין גברי הקישו 1 לבחירת קול קריינית נשית הקישו 2")
                     // מקסימום 1, מינימום 1, ללא אישור (AskNo מופעל אוטומטית), חוסם אפס (allowZero=false)
-                    .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, false, false); 
+                    .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, true, true); 
                 break;
 
             case 1:
@@ -306,7 +310,7 @@ module.exports = async (req, res) => {
                 if (query.VoiceGender !== "1" && query.VoiceGender !== "2") {
                     responseBuilder = new YemotCommandBuilder("read")
                         .addText("בחירה לא חוקית לבחירת קול גברי הקישו 1 לקול נשי הקישו 2")
-                        .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, false, false); 
+                        .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, true, true);
                     break;
                 }
 
