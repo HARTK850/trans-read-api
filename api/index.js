@@ -91,6 +91,21 @@ class YemotCommandBuilder {
         return this;
     }
 
+    setFolderDigits(varName) {
+    this.params = [
+        varName,      // שם משתנה
+        "no",         // לא להשתמש בקיים
+        "Digits",     // סוג קלט
+        "20",         // מקסימום ספרות
+        "1",          // מינימום ספרות
+        "15",         // זמן המתנה
+        "Digits",     // השמעת ספרות רגילה
+        "no",         // לא לחסום כוכבית
+        "no"          // לא לחסום אפס
+    ];
+    return this;
+}
+
     /**
      * הגדרת קלט הקלטה (Record). מפעיל את התפריט הרשמי של ימות המשיח
      * (1 לשמיעה, 2 לאישור, 3 הקלטה מחדש). מושג על ידי השארת הפרמטר ה-6 ריק.
@@ -383,7 +398,7 @@ else if (query.UserAudioRecord !== undefined) state = 100;
                         .addText("נא הקישו את מספר השלוחה לשמירה למעבר בין שלוחות פנימיות הקישו כוכבית ובסיום הקישו סולמית")
                         .addText("לשמירה בתיקייה הראשית הקישו אפס וסולמית")
                         // מתיר אפס, מתיר כוכבית, אבל אנחנו נמיר כוכבית לסלש בפונקציית העזר שלנו ולא נסמוך על ימות
-                        .params = ["TargetFolderDefault","no","Digits","20","1","15","Digits","no","no"];
+                        .setFolderDigits("TargetFolderDefault");
                 }
                 break;
 
@@ -395,7 +410,7 @@ else if (query.UserAudioRecord !== undefined) state = 100;
                     responseBuilder = new YemotCommandBuilder("read")
                         .addText("נא הקישו את מספר השלוחה עבור העותק הנוסף ובסיום הקישו סולמית")
                         .addText("לשמירה בתיקייה הראשית הקישו אפס וסולמית")
-                        .setReadDigitsAdvanced("TargetFolderCopy", 20, 1, 15, true, true, true);
+                        .setFolderDigits("TargetFolderCopy");
                 } else if (query.WantCopySave === "2") {
                     responseBuilder = new YemotCommandBuilder("id_list_message").addText("תודה ולהתראות").addGoToFolder("/");
                 } else {
