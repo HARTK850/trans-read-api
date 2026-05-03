@@ -93,15 +93,21 @@ class YemotCommandBuilder {
 
     setFolderDigits(varName) {
     this.params = [
-        varName,      // שם משתנה
-        "no",         // לא להשתמש בקיים
-        "Digits",     // סוג קלט
-        "20",         // מקסימום ספרות
-        "1",          // מינימום ספרות
-        "15",         // זמן המתנה
-        "No",     // השמעת ספרות רגילה
-        "no",         // לא לחסום כוכבית
-        "no"          // לא לחסום אפס
+        varName,
+        "no",
+        "Digits",
+        "20",
+        "1",
+        "15",
+        "No",
+        "no",
+        "no",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "no"
     ];
     return this;
 }
