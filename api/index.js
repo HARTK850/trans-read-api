@@ -383,7 +383,7 @@ else if (query.UserAudioRecord !== undefined) state = 100;
                         .addText("נא הקישו את מספר השלוחה לשמירה למעבר בין שלוחות פנימיות הקישו כוכבית ובסיום הקישו סולמית")
                         .addText("לשמירה בתיקייה הראשית הקישו אפס וסולמית")
                         // מתיר אפס, מתיר כוכבית, אבל אנחנו נמיר כוכבית לסלש בפונקציית העזר שלנו ולא נסמוך על ימות
-                        .setReadDigitsAdvanced("TargetFolderDefault", 20, 1, 15, true, true, true);
+                        .params = ["TargetFolderDefault","no","Digits","20","1","15","Digits","no","no"];
                 }
                 break;
 
