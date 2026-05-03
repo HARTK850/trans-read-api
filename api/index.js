@@ -64,29 +64,23 @@ class YemotCommandBuilder {
      * פונקציה חכמה למניעת כל בקשות האישור ("לאישור הקישו 1").
      * בונה מערך מדויק של 15 פרמטרים כפי שדורשת ימות המשיח.
      */
-    setReadDigitsAdvanced(varName, maxDigits, minDigits, timeout, disableConfirmation = true, allowZero = false, allowAsterisk = false) {
-        // בפרמטר ה-7 אנו כותבים 'No' (שלא ישמיע את ההקשה).
-        // בפרמטר ה-15 אנו כותבים 'no' (שלא יבקש אישור סופי).
-        const playType = disableConfirmation ? "No" : "Digits";
-        const blockAsterisk = allowAsterisk ? "no" : "yes";
-        const blockZero = allowZero ? "no" : "yes"; 
-
-        this.params =[
-            varName,               // 1. משתנה
-            "no",                  // 2. שימוש בקיים
-            "Digits",              // 3. סוג
-            maxDigits.toString(),  // 4. מקסימום
-            minDigits.toString(),  // 5. מינימום
-            timeout.toString(),    // 6. זמן המתנה
-            playType,              // 7. צורת השמעה (No)
-            blockAsterisk,         // 8. חסימת כוכבית
-            blockZero,             // 9. חסימת אפס
-            "",                    // 10. החלפת תווים (נשאר ריק כדי למנוע באגים, השרת מחליף כוכביות)
-            "",                    // 11. מקשים מורשים
-            "",                    // 12. כמות פעמים לפני ניתוק
-            "",                    // 13. המשך אם ריק
-            "",                    // 14. מודל מקלדת
-            disableConfirmation ? "no" : "yes" // 15. אישור סופי (no!)
+    setReadDigitsAdvanced(varName, maxDigits, minDigits, timeout, disableConfirmation = true, allowZero = true, allowAsterisk = true) {
+        this.params = [
+            varName,                            // 1. שם המשתנה
+            "no",                               // 2. האם להשתמש בקיים
+            "Digits",                           // 3. סוג הקלט
+            maxDigits.toString(),               // 4. מקסימום ספרות
+            minDigits.toString(),               // 5. מינימום ספרות
+            timeout.toString(),                 // 6. זמן המתנה בין ספרות
+            "Digits",                           // 7. צורת השמעה (שינינו מ-No ל-Digits ליציבות)
+            allowAsterisk ? "no" : "yes",       // 8. האם לחסום כוכבית (no = לא לחסום)
+            allowZero ? "no" : "yes",           // 9. האם לחסום אפס (no = לא לחסום)
+            "no",                               // 10. החלפת תווים
+            "",                                 // 11. מקשים מורשים
+            "3",                                // 12. מספר ניסיונות (מונע את הודעת השגיאה המיידית)
+            "no",                               // 13. המשך אם ריק
+            "",                                 // 14. מודל מקלדת
+            disableConfirmation ? "no" : "yes"  // 15. "לאישור הקישו 1" (no = מבטל)
         ];
         return this;
     }
