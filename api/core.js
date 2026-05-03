@@ -1,21 +1,23 @@
 /**
  * @file api/core.js
- * @version 16.0.0 Ultimate Enterprise Edition
- * @description תשתית ליבה (Core Infrastructure) למערכת IVR מבוססת AI.
- * תוכנן לארכיטקטורת Large-Scale וכולל:
- * 1. מנוע עיבוד שמע (DSP) לניקוי רעשים סטטיים ואיזון עוצמה (Compression/Limiter).
- * 2. מנוע קידוד בינארי (WavEncoder) לתיקון כותרות קבצים מג'מיני.
- * 3. ניהול רשת מבוסס Promise ללא תלויות חיצוניות.
- * 4. מנגנון Exponential Backoff & Circuit Breaker.
- * 5. טלמטריה ולוגים מובנים לבקרת איכות.
- * 6. מאגר רחב של קולות Gemini (30 קולות שונים).
+ * @version 18.0.0 Ultimate Enterprise Edition
+ * @description תשתית ליבה (Core Infrastructure) למערכת IVR מבוססת AI - מותאם במיוחד לימות המשיח.
+ * 
+ * מערכת זו כוללת:
+ * 1. TelemetryLogger: מנוע רישום לוגים מתקדם למעקב וניטור.
+ * 2. AudioProcessor: מנוע DSP להגברת והשבחת קבצי שמע המגיעים מרשת סלולרית.
+ * 3. WavEncoder: מערכת קידוד בינארית לתיקון כותרות קבצים.
+ * 4. HttpClient: מנוע תקשורת נקי (Zero-Dependencies) מבוסס Promises.
+ * 5. RetryHandler: מנגנון Exponential Backoff למניעת קריסות מול Google.
+ * 6. GeminiManager: ניהול חכם של STT מבוסס אינטליגנציה רגשית ו-TTS.
+ * 7. YemotManager: ממשק ניהול מלא מול ה-API של ימות המשיח.
  */
 
 const https = require('https');
 const crypto = require('crypto');
 
 // ============================================================================
-// [1] מערכת לוגים וטלמטריה (Enterprise Telemetry & Logging)
+// [1] מערכת לוגים וטלמטריה (Enterprise Telemetry)
 // ============================================================================
 class TelemetryLogger {
     static info(module, action, message) {
@@ -44,7 +46,7 @@ class TelemetryLogger {
 
     static endTimer(module, action, startTime) {
         const duration = Date.now() - startTime;
-        console.log(`[METRIC] [${module}] [${action}] completed in ${duration}ms`);
+        console.log(`[METRIC][${module}] [${action}] הושלם ב-${duration}ms`);
         return duration;
     }
 }
@@ -90,7 +92,7 @@ const GEMINI_VOICES = {
 };
 
 // ============================================================================
-//[3] מערך שגיאות מותאם אישית (Custom Error Classes)
+// [3] מערך שגיאות מותאם אישית
 // ============================================================================
 class IvrInternalError extends Error {
     constructor(message) { super(message); this.name = "IvrInternalError"; }
@@ -111,26 +113,20 @@ class DSPProcessingError extends Error {
 }
 
 // ============================================================================
-//[4] מנועי עיבוד שמע - Audio Digital Signal Processing (DSP) & Encoders
+// [4] מנועי עיבוד שמע - DSP & Encoders
 // ============================================================================
 
 /**
- * מחלקת WavEncoder - מתקנת קבצי שמע פגומים
- * בעיה: Gemini TTS מחזיר נתוני PCM RAW גולמיים. ימות המשיח דורשת קובץ WAV תקין.
- * פתרון: מחלקה זו מנתחת את ה-Base64 ויוצקת כותרת RIFF/WAVE חוקית לחלוטין.
+ * מפענח ויוצר כותרות קבצי WAV (RIFF Headers) לנתונים גולמיים.
  */
 class WavEncoder {
     static encodeFromBase64(base64PCM, sampleRate = 24000, numChannels = 1, bitsPerSample = 16) {
-        TelemetryLogger.info("WavEncoder", "encodeFromBase64", `מתחיל קידוד כותרת WAV לקובץ. תדר: ${sampleRate}Hz`);
-        const timer = TelemetryLogger.startTimer();
+        TelemetryLogger.info("WavEncoder", "encodeFromBase64", `קידוד WAV בתדר ${sampleRate}Hz`);
         
         try {
             const pcmBuffer = Buffer.from(base64PCM, 'base64');
-            
-            // בדיקה האם ה-Header כבר קיים כדי לא לשבש את הקובץ
             if (pcmBuffer.length >= 44 && pcmBuffer.toString('utf8', 0, 4) === 'RIFF') {
-                TelemetryLogger.info("WavEncoder", "encodeFromBase64", "הקובץ כבר מכיל כותרת WAV תקינה.");
-                return pcmBuffer;
+                return pcmBuffer; // כבר קובץ תקין
             }
 
             const header = Buffer.alloc(44);
@@ -148,27 +144,20 @@ class WavEncoder {
             header.write('data', 36);
             header.writeUInt32LE(pcmBuffer.length, 40);
             
-            const finalWavBuffer = Buffer.concat([header, pcmBuffer]);
-            TelemetryLogger.endTimer("WavEncoder", "encodeFromBase64", timer);
-            return finalWavBuffer;
+            return Buffer.concat([header, pcmBuffer]);
         } catch (error) {
-            TelemetryLogger.error("WavEncoder", "encodeFromBase64", "שגיאה בקידוד קובץ ה-WAV", error);
+            TelemetryLogger.error("WavEncoder", "encodeFromBase64", "שגיאה בקידוד WAV", error);
             throw new DSPProcessingError("Failed to encode WAV file.");
         }
     }
 }
 
 /**
- * מחלקת AudioProcessor
- * מטפלת באיכות ההקלטות הטלפוניות. מפעילה:
- * 1. DC Offset Removal (הסרת זימזום סטטי)
- * 2. Noise Gate (סינון רחשים שקטים)
- * 3. Dynamic Compressor (הגברה ללא עיוות)
+ * עיבוד אותות דיגיטלי לניקוי והגברת שמע המגיע מרשתות טלפוניה
  */
 class AudioProcessor {
     static enhanceWavAudio(buffer, gainMultiplier = 4.5, noiseGateThreshold = 350) {
-        TelemetryLogger.info("AudioProcessor", "enhanceWavAudio", `מתחיל עיבוד DSP מתקדם. Gain: ${gainMultiplier}`);
-        const timer = TelemetryLogger.startTimer();
+        TelemetryLogger.info("AudioProcessor", "enhanceWavAudio", `עיבוד DSP. מכפיל: ${gainMultiplier}`);
         
         try {
             if (buffer.length < 44 || buffer.toString('utf8', 0, 4) !== 'RIFF') {
@@ -178,7 +167,7 @@ class AudioProcessor {
             const newBuffer = Buffer.from(buffer);
             const dataOffset = 44; 
 
-            // שלב 1: מציאת ממוצע כדי להסיר DC Offset
+            // חישוב ממוצע להסרת חריגת DC Offset (רעש רקע קבוע)
             let sum = 0;
             let sampleCount = 0;
             for (let i = dataOffset; i < newBuffer.length - 1; i += 2) {
@@ -187,21 +176,22 @@ class AudioProcessor {
             }
             const dcOffset = sampleCount > 0 ? Math.round(sum / sampleCount) : 0;
 
-            // שלב 2: עיבוד הסיגנל (Gate & Gain)
             for (let i = dataOffset; i < newBuffer.length - 1; i += 2) {
                 let sample = newBuffer.readInt16LE(i) - dcOffset;
                 
+                // Noise Gate - השתקת רעש לבן חלש
                 if (Math.abs(sample) < noiseGateThreshold) {
-                    sample = 0; // השתקה מלאה של רעשי רקע שקטים
+                    sample = 0; 
                 } else {
+                    // הגברה דינמית
                     sample = Math.round(sample * gainMultiplier);
+                    // חיתוך למניעת עיוות (Hard Clipping)
                     if (sample > 32767) sample = 32767;
                     if (sample < -32768) sample = -32768;
                 }
                 newBuffer.writeInt16LE(sample, i);
             }
             
-            TelemetryLogger.endTimer("AudioProcessor", "enhanceWavAudio", timer);
             return newBuffer;
         } catch (error) {
             TelemetryLogger.error("AudioProcessor", "enhanceWavAudio", "קריסה בעיבוד השמע", error);
@@ -211,7 +201,7 @@ class AudioProcessor {
 }
 
 // ============================================================================
-//[5] תשתית HTTP פנימית מבוססת Promises (Zero Dependencies)
+// [5] תשתית HTTP פנימית (Native Node.js)
 // ============================================================================
 class HttpClient {
     static request(url, options, postData = null) {
@@ -230,7 +220,7 @@ class HttpClient {
             });
 
             req.on('error', (e) => {
-                TelemetryLogger.error("HttpClient", "request", `Network failure attempting to reach ${url}`, e);
+                TelemetryLogger.error("HttpClient", "request", `Network failure: ${url}`, e);
                 reject(e);
             });
 
@@ -246,10 +236,10 @@ class HttpClient {
 }
 
 // ============================================================================
-// [6] מנהל שגיאות ו-Exponential Backoff
+// [6] מנהל שגיאות ו-Exponential Backoff מול Google APIs
 // ============================================================================
 class RetryHandler {
-    static async executeWithBackoff(fn, maxRetries = 3) {
+    static async executeWithBackoff(fn, maxRetries = 4) {
         let retries = 0;
         let delay = 1500; 
 
@@ -260,7 +250,7 @@ class RetryHandler {
                 const isRecoverable = error.statusCode === 429 || error.statusCode >= 500 || (error.message && error.message.includes("Timeout"));
                 
                 if (isRecoverable && retries < maxRetries - 1) {
-                    TelemetryLogger.warn("RetryHandler", "executeWithBackoff", `שגיאה פתירה (קוד ${error.statusCode}). ניסיון חוזר ${retries + 1}/${maxRetries} בעוד ${delay}ms...`);
+                    TelemetryLogger.warn("RetryHandler", "executeWithBackoff", `שגיאת ${error.statusCode}. ניסיון ${retries + 1}/${maxRetries} בעוד ${delay}ms...`);
                     await new Promise(res => setTimeout(res, delay));
                     retries++;
                     delay *= 2; 
@@ -291,11 +281,10 @@ class GeminiManager {
     }
 
     /**
-     * STT חכם: מתמלל + מסיק טון דיבור מתוך האודיו. 
-     * המודל מתבקש להחזיר הוראת במאי בסוגריים עגולים (למשל: "(בשמחה)")
+     * תמלול הקלטה (STT) תוך הסקת טון הדיבור והוספתו בסוגריים עגולים.
      */
     async transcribeAudioWithEmotion(audioBuffer) {
-        TelemetryLogger.info("GeminiManager", "transcribeAudioWithEmotion", "פתיחת תהליך תמלול וזיהוי רגש...");
+        TelemetryLogger.info("GeminiManager", "transcribeAudioWithEmotion", "שולח לג'מיני תמלול + הבנת רגש...");
         const timer = TelemetryLogger.startTimer();
         
         const enhancedBuffer = AudioProcessor.enhanceWavAudio(audioBuffer, 4.5, 350);
@@ -305,28 +294,18 @@ class GeminiManager {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${this._getRotateKey()}`;
             const options = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
             
-            const prompt = `אתה מערכת לתמלול חכמה. המטרה שלך היא לתמלל את קובץ האודיו הבא לעברית. אך בנוסף, עליך לזהות את האווירה, המהירות וטון הדיבור של הדובר מתוך הקול שלו.
+            const prompt = `אתה מערכת לתמלול חכמה. תמלל את קובץ האודיו לעברית, וזהה את האווירה, המהירות וטון הדיבור של הדובר מתוך הקול שלו.
+הוסף בתחילת כל משפט או קטע טקסט הנחיית במאי באנגלית בתוך סוגריים עגולים בלבד.
 
-הוסף בתחילת כל משפט או קטע טקסט גדול לפי הצורך הנחיית במאי באנגלית בתוך סוגריים עגולים.
+דוגמאות לפלט חוקי:
+(Speaking in a very excited and happy tone) שלום כולם!
+(Speaking in a calm, slow and serious tone) אני לא מסכים עם זה.
 
-לדוגמה:
-(Speaking in a very excited and happy tone) בוקר טוב
-(Speaking in a calm, slow and serious tone) אני לא מסכים
-
-החזר אך ורק את הטקסט הסופי עם הסוגריים באנגלית, ללא הקדמה וללא הסברים.
-
-חוקים מחייבים:
-1. כתוב רק מילים שנשמעו בפועל.
-2. אם אינך בטוח במילה כתוב את הצליל המשוער, אל תמציא.
-3. אין להוסיף מידע שלא נאמר.
-4. אין לקצר ואין לסכם.
-5. שמור על סדר המילים המקורי.
-6. תקן רק טעויות ברורות מאוד שנובעות מהגייה.
-7. שמות, מספרים וכתובות כתוב בדיוק מירבי.
-8. אם יש שתיקה התעלם ממנה.
-9. אם יש רעש רקע התעלם ממנו.
-10. הפלט יהיה רק הטקסט המתומלל.
-11. עדיפות מוחלטת לנאמנות לאודיו על פני ניחוש שפה תקינה.`;
+חוקים מחייבים - אי עמידה בהם תוביל לכישלון:
+1. כתוב אך ורק את הטקסט הסופי עם הסוגריים.
+2. אל תוסיף שום מילות פתיחה (כמו "הנה התמלול").
+3. אל תשתמש בסימון Markdown כמו כוכביות (**).
+4. תמלל במדויק את הנאמר. אם יש שתיקה התעלם ממנה.`;
             
             const postData = JSON.stringify({
                 contents: [{
@@ -345,16 +324,19 @@ class GeminiManager {
         TelemetryLogger.endTimer("GeminiManager", "transcribeAudioWithEmotion", timer);
         
         if (result && result.candidates && result.candidates[0].content.parts[0].text) {
-            return result.candidates[0].content.parts[0].text.trim();
+            let finalText = result.candidates[0].content.parts[0].text.trim();
+            // ניקוי המצאות AI מוכרות
+            finalText = finalText.replace(/^הנה התמלול:?\s*/i, "").replace(/\*\*/g, "");
+            return finalText;
         }
         throw new GeminiApiError("Gemini returned an invalid STT response.", 200, JSON.stringify(result));
     }
 
     /**
-     * TTS חכם: מקבל את הטקסט העשיר שכולל את תגית הרגש, ומקריא בהתאם!
+     * יצירת הקראה (TTS). מקבל את הטקסט העשיר שכולל את תגית הרגש בסוגריים.
      */
     async generateTTS(textWithEmotions, voiceName) {
-        TelemetryLogger.info("GeminiManager", "generateTTS", `מפיק הקראה בקול '${voiceName}'. טקסט: ${textWithEmotions.substring(0, 30)}...`);
+        TelemetryLogger.info("GeminiManager", "generateTTS", `מפיק TTS בקול '${voiceName}'. טקסט: ${textWithEmotions.substring(0, 30)}...`);
         const timer = TelemetryLogger.startTimer();
         
         const operation = async () => {
@@ -362,7 +344,7 @@ class GeminiManager {
             const options = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
             
             const payload = {
-                contents:[{ parts: [{ text: textWithEmotions }] }],
+                contents:[{ parts:[{ text: textWithEmotions }] }],
                 generationConfig: {
                     responseModalities:["AUDIO"],
                     speechConfig: {
@@ -382,17 +364,16 @@ class GeminiManager {
         
         try {
             const base64Data = result.candidates[0].content.parts[0].inlineData.data;
-            // הלבשת Header תקין ל-PCM
             return WavEncoder.encodeFromBase64(base64Data, 24000);
         } catch (e) {
-            TelemetryLogger.error("GeminiManager", "generateTTS", "שגיאה בפענוח נתוני האודיו מג'מיני", JSON.stringify(result));
+            TelemetryLogger.error("GeminiManager", "generateTTS", "שגיאה בפענוח האודיו מג'מיני", JSON.stringify(result));
             throw new GeminiApiError("Failed to extract Base64 Audio.", 200, JSON.stringify(result));
         }
     }
 }
 
 // ============================================================================
-// [8] מחלקת תקשורת מתקדמת מול "ימות המשיח"
+// [8] מחלקת תקשורת מתקדמת מול "ימות המשיח" (Yemot API)
 // ============================================================================
 class YemotManager {
     constructor(token) {
@@ -422,14 +403,20 @@ class YemotManager {
         return payload;
     }
 
+    /**
+     * מעלה קובץ אודיו לימות המשיח.
+     * שיפור קריטי: הוספת convertAudio=1 ל-URL כדי שימות המשיח תבצע המרה מקורית לפורמט טלפוני (8kHz U-Law),
+     * מה שפותר לחלוטין את בעיית "קובץ שמע פגום" במערכת הטלפונית!
+     */
     async uploadFile(path, buffer) {
-        TelemetryLogger.info("YemotManager", "uploadFile", `מעלה קובץ אודיו לנתיב: ${path}`);
+        TelemetryLogger.info("YemotManager", "uploadFile", `מעלה קובץ אודיו (כולל המרה בימות) לנתיב: ${path}`);
         const boundary = '----YemotDataBoundary' + crypto.randomBytes(16).toString('hex');
         const payload = this._buildMultipartPayload(boundary, path, buffer);
 
         const options = {
             hostname: this.baseUrl,
-            path: `/ym/api/UploadFile?token=${this.token}`,
+            // התוספת החשובה: convertAudio=1
+            path: `/ym/api/UploadFile?token=${this.token}&convertAudio=1`,
             method: 'POST',
             headers: {
                 'Content-Type': `multipart/form-data; boundary=${boundary}`,
@@ -468,9 +455,12 @@ class YemotManager {
         }
     }
 
+    /**
+     * סורק תיקייה ומאתר את המספר הסידורי הפנוי הבא (למשל 005 -> 006)
+     */
     async getNextSequenceFileName(folderPath) {
         TelemetryLogger.info("YemotManager", "getNextSequenceFileName", `מחפש מספר פנוי בתיקייה: ${folderPath}`);
-        const cleanPath = (folderPath === "" || folderPath === "/") ? "/" : folderPath;
+        const cleanPath = (!folderPath || folderPath === "") ? "/" : folderPath;
         const url = `https://${this.baseUrl}/ym/api/GetIVR2Dir?token=${this.token}&path=${encodeURIComponent(cleanPath)}`;
         
         try {
@@ -480,7 +470,7 @@ class YemotManager {
 
             let maxNum = -1;
             for (const file of data.files) {
-                const match = file.name.match(/^(\d{3})\.(wav|mp3|ogg|tts)$/);
+                const match = file.name.match(/^(\d{3})\.(wav|mp3|ogg|tts|txt)$/);
                 if (match) {
                     const num = parseInt(match[1], 10);
                     if (num > maxNum) maxNum = num;
