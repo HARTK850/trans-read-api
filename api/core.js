@@ -1,6 +1,6 @@
 /**
  * @file api/core.js
- * @version 15.5.0 Ultimate Enterprise Edition
+ * @version 16.0.0 Ultimate Enterprise Edition
  * @description תשתית ליבה (Core Infrastructure) למערכת IVR מבוססת AI.
  * תוכנן לארכיטקטורת Large-Scale וכולל:
  * 1. מנוע עיבוד שמע (DSP) לניקוי רעשים סטטיים ואיזון עוצמה (Compression/Limiter).
@@ -8,7 +8,7 @@
  * 3. ניהול רשת מבוסס Promise ללא תלויות חיצוניות.
  * 4. מנגנון Exponential Backoff & Circuit Breaker.
  * 5. טלמטריה ולוגים מובנים לבקרת איכות.
- * 6. מאגר רחב של קולות Gemini (60 קולות שונים).
+ * 6. מאגר רחב של קולות Gemini (30 קולות שונים).
  */
 
 const https = require('https');
@@ -68,12 +68,7 @@ const GEMINI_VOICES = {
         { id: "Zubenelgenubi", desc: "קול גברי שגרתי" },
         { id: "Sadaltager", desc: "קול גברי ידען" },
         { id: "Rasalgethi", desc: "קול גברי עמוק" },
-        { id: "Schedar", desc: "קול גברי מאוזן" },
-        { id: "Orion", desc: "קול גברי דרמטי ומהדהד" },
-        { id: "Sirius", desc: "קול גברי קורן ובהיר" },
-        { id: "Rigel", desc: "קול גברי עוצמתי וחד" },
-        { id: "Castor", desc: "קול גברי צעיר ורענן" },
-        { id: "Pollux", desc: "קול גברי ידידותי ומזמין" }
+        { id: "Schedar", desc: "קול גברי מאוזן" }
     ],
     FEMALE:[
         { id: "Zephyr", desc: "קול נשי בהיר ומואר" },
@@ -90,12 +85,7 @@ const GEMINI_VOICES = {
         { id: "Achird", desc: "קול נשי ידידותי" },
         { id: "Vindemiatrix", desc: "קול נשי עדין" },
         { id: "Sadachbia", desc: "קול נשי תוסס" },
-        { id: "Sulafat", desc: "קול נשי חם ועוטף" },
-        { id: "Vega", desc: "קול נשי אלגנטי ואצילי" },
-        { id: "Maia", desc: "קול נשי רך ואמהי" },
-        { id: "Electra", desc: "קול נשי נמרץ ומלא תשוקה" },
-        { id: "Alcyone", desc: "קול נשי מתוק ושמח" },
-        { id: "Celaeno", desc: "קול נשי רציני ומקצועי" }
+        { id: "Sulafat", desc: "קול נשי חם ועוטף" }
     ]
 };
 
@@ -137,6 +127,7 @@ class WavEncoder {
         try {
             const pcmBuffer = Buffer.from(base64PCM, 'base64');
             
+            // בדיקה האם ה-Header כבר קיים כדי לא לשבש את הקובץ
             if (pcmBuffer.length >= 44 && pcmBuffer.toString('utf8', 0, 4) === 'RIFF') {
                 TelemetryLogger.info("WavEncoder", "encodeFromBase64", "הקובץ כבר מכיל כותרת WAV תקינה.");
                 return pcmBuffer;
@@ -220,7 +211,7 @@ class AudioProcessor {
 }
 
 // ============================================================================
-// [5] תשתית HTTP פנימית מבוססת Promises (Zero Dependencies)
+//[5] תשתית HTTP פנימית מבוססת Promises (Zero Dependencies)
 // ============================================================================
 class HttpClient {
     static request(url, options, postData = null) {
@@ -300,7 +291,8 @@ class GeminiManager {
     }
 
     /**
-     * STT חכם: מתמלל + מסיק טון דיבור מתוך האודיו (למשל: סרקזם, שמחה, עצב)
+     * STT חכם: מתמלל + מסיק טון דיבור מתוך האודיו. 
+     * המודל מתבקש להחזיר הוראת במאי בסוגריים עגולים (למשל: "(בשמחה)")
      */
     async transcribeAudioWithEmotion(audioBuffer) {
         TelemetryLogger.info("GeminiManager", "transcribeAudioWithEmotion", "פתיחת תהליך תמלול וזיהוי רגש...");
@@ -313,8 +305,7 @@ class GeminiManager {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${this._getRotateKey()}`;
             const options = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
             
-            // פרומפט מיוחד - ה-AI פועל כבמאי
-            const prompt = "אתה מערכת לתמלול חכמה. המטרה שלך היא לתמלל את קובץ האודיו הבא לעברית. אך בנוסף, עליך לזהות את האווירה, המהירות וטון הדיבור של הדובר. עליך להוסיף בתחילת התמלול הנחיית במאי (באנגלית) בתוך סוגריים עגולים. למשל: '(Speaking in a very excited and happy tone) בוקר טוב!'. או: '(Speaking in a calm, slow and serious tone) אני לא מסכים'. החזר אך ורק את הטקסט הסופי עם הסוגריים העגולים באנגלית, ללא שום מילת הקדמה, מרכאות או הסבר נוסף.";
+            const prompt = "אתה מערכת לתמלול חכמה. המטרה שלך היא לתמלל את קובץ האודיו הבא לעברית. אך בנוסף, עליך לזהות את האווירה, המהירות וטון הדיבור של הדובר מתוך הקול שלו. הוסף בתחילת התמלול הנחיית במאי (באנגלית) בתוך סוגריים עגולים. למשל: '(Speaking in a very excited and happy tone) בוקר טוב!'. או: '(Speaking in a calm, slow and serious tone) אני לא מסכים'. החזר אך ורק את הטקסט הסופי עם הסוגריים העגולים באנגלית, ללא שום מילת הקדמה, מרכאות או הסבר נוסף.";
             
             const postData = JSON.stringify({
                 contents: [{
