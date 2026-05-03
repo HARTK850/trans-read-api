@@ -1,14 +1,15 @@
 /**
  * @file api/index.js
- * @version 17.0.0 (Ultimate Enterprise AI Edition)
- * @description מנוע IVR מתקדם המשלב Gemini AI עם מערכת ימות המשיח.
- * * שיפורים בגרסה זו:
- * 1. תיקון ה-State Machine: סנכרון מלא בין זיהוי המשתנים ל-Switch Case.
- * 2. תיקון ה-AskNo: פרמטר 7 הוחזר ל-"no" כדי למנוע כפילויות הקראה.
- * 3. הרחבת ה-Dashboard: ממשק ניהול ויזואלי מלא כולל סטטיסטיקות דמה.
- * 4. לוגיקת זיהוי שגיאות: אם משתמש מקיש ספרה לא נכונה, המערכת מחזירה אותו בדיוק לנקודה הנכונה.
- * 5. ניהול זיכרון: ניקוי משתנים חכם למניעת לופים.
- * 6. תמיכה ב-TTS/STT משופר.
+ * @version 16.5.0 (Ultimate Enterprise Edition)
+ * @description מודול IVR חכם המחבר את מערכת הטלפוניה של "ימות המשיח" למודלי ה-AI של גוגל (Gemini).
+ * 
+ * פיצ'רים בגרסה זו:
+ * 1. "AskNo" מיושם באופן הרמטי בעזרת 15 הפרמטרים, מבטל לחלוטין "לאישור הקישו 1".
+ * 2. תפריטי 1 ו-2 (בן/בת, כן/לא) דורשים הקשה בודדת ומזנקים הלאה.
+ * 3. תפריט הקולות (30 קולות) דורש 2 ספרות בדיוק (01 עד 30).
+ * 4. התפריט המקורי של ימות המשיח לאחר הקלטה הוחזר.
+ * 5. ה-AI מנתח את טון הדיבור לבד, ללא תפריט סגנונות מעיק.
+ * 6. ממשק Dashboard אינטרנטי לניהול המערכת כשנכנסים מדפדפן!
  */
 
 const { GeminiManager, YemotManager, GEMINI_VOICES, TelemetryLogger } = require('./core');
@@ -16,37 +17,32 @@ const fs = require('fs');
 const path = require('path');
 
 // ============================================================================
-// קבועים והגדרות מערכת
+// הגדרות סביבה גלובליות
 // ============================================================================
 const GEMINI_API_KEYS = process.env.GEMINI_API_KEYS 
     ? process.env.GEMINI_API_KEYS.split(',') 
-    : ["YOUR_DEFAULT_API_KEY_HERE"];
+    :["YOUR_DEFAULT_API_KEY_HERE"];
 
 const gemini = new GeminiManager(GEMINI_API_KEYS);
 const TEMP_FOLDER = "/Temp_Gemini_App"; 
 
 // ============================================================================
-// מחלקת עזר לבניית פקודות ימות המשיח (Yemot Protocol)
+// מנוע אובייקט-אוריינטד להרכבת תגובות לתקן המחמיר של ימות המשיח
 // ============================================================================
 class YemotCommandBuilder {
     constructor(action) {
         this.action = action; 
-        this.contentBlocks = []; 
-        this.params = []; 
-        this.nextStateParams = {}; 
+        this.contentBlocks =[]; 
+        this.params =[]; 
+        this.nextState = {}; 
         this.goToFolder = null; 
     }
 
-    /**
-     * ניקוי טקסט למניעת שגיאות הקראה במנוע של ימות
-     */
     cleanYemotText(text) {
+        // מחיקת תווים בעייתיים (נקודות, פסיקים) למניעת קריסות של ימות המשיח. 
+        // משאיר רווחים כדי שההקראה תישמע טבעית!
         if (!text) return "";
-        return text.toString()
-            .replace(/[.,-]/g, " ")
-            .replace(/["']/g, "")
-            .replace(/\s+/g, " ")
-            .trim();
+        return text.toString().replace(/[.,-]/g, " ").replace(/\s+/g, " ").trim();
     }
 
     addText(text) {
@@ -59,56 +55,60 @@ class YemotCommandBuilder {
 
     addFile(filePath) {
         if (filePath) {
-            // מסיר סיומות קובץ אם קיימות, ימות מעדיפה בלי .wav
-            const cleanPath = filePath.replace('.wav', '');
-            this.contentBlocks.push(`f-${cleanPath}`);
+            this.contentBlocks.push(`f-${filePath}`);
         }
         return this;
     }
 
     /**
-     * פונקציית הליבה של ה-IVR: קליטת מקשים ללא "לאישור הקישו 1"
-     * @param {string} varName - שם המשתנה שיחזור ב-Query String
-     * @param {number} max - מקסימום ספרות
-     * @param {number} min - מינימום ספרות
-     * @param {number} timeout - זמן המתנה בשניות
-     * @param {boolean} askNo - האם לבטל אישור (AskNo)
+     * פונקציה חכמה למניעת כל בקשות האישור ("לאישור הקישו 1").
+     * בונה מערך מדויק של 15 פרמטרים כפי שדורשת ימות המשיח.
      */
-    setReadDigits(varName, max, min, timeout, askNo = true) {
+    setReadDigitsAdvanced(varName, maxDigits, minDigits, timeout, disableConfirmation = true, allowZero = true, allowAsterisk = true) {
+        // שים לב: שינינו את ברירת המחדל ל-true עבור אפס וכוכבית
+        const blockAsterisk = allowAsterisk ? "no" : "yes";
+        const blockZero = allowZero ? "no" : "yes"; 
+
         this.params = [
-            varName,          // 1. שם המשתנה
-            "no",             // 2. האם להשתמש בערך קיים (no = תמיד לבקש מחדש)
-            "Digits",         // 3. סוג הקלט
-            max.toString(),   // 4. מקסימום ספרות
-            min.toString(),   // 5. מינימום ספרות
-            timeout.toString(),// 6. זמן המתנה
-            "no",             // 7. האם להשמיע את מה שהוקש (ב-AskNo חובה no!)
-            "no",             // 8. חסימת כוכבית
-            "no",             // 9. חסימת אפס
-            "no",             // 10. האם להשמיע "מספר לא חוקי"
-            "",               // 11. שפת הקראה
-            "3",              // 12. מספר ניסיונות
-            "no",             // 13. הקלטה במקרה של כישלון
-            "",               // 14. הודעה בסיום ניסיונות
-            askNo ? "no" : "yes" // 15. האם לבקש אישור סופי (no = דלג על "לאישור הקישו 1")
+            varName,               // 1
+            "no",                  // 2
+            "Digits",              // 3
+            maxDigits.toString(),  // 4
+            minDigits.toString(),  // 5
+            timeout.toString(),    // 6
+            "Digits",              // 7. שינוי מ-No ל-Digits (קריטי!)
+            blockAsterisk,         // 8
+            blockZero,             // 9
+            "no",                  // 10. שינוי מריק ל-"no"
+            "",                    // 11
+            "3",                   // 12. הוספת 3 ניסיונות (קריטי למניעת "בחירה לא חוקית")
+            "no",                  // 13
+            "",                    // 14
+            disableConfirmation ? "no" : "yes" // 15
         ];
         return this;
     }
 
     /**
-     * פקודת הקלטה חכמה שמשתמשת בתפריט המובנה של ימות המשיח
+     * הגדרת קלט הקלטה (Record). מפעיל את התפריט הרשמי של ימות המשיח
+     * (1 לשמיעה, 2 לאישור, 3 הקלטה מחדש). מושג על ידי השארת הפרמטר ה-6 ריק.
      */
     setRecordInput(varName, folder, fileName) {
-        this.params = [
-            varName,   
-            "no",      
-            "record",  
-            folder,    
-            fileName,  
-            "",        // השארת פרמטר 6 ריק מפעילה את תפריט "1 לשמיעה 2 לאישור"
-            "yes",     
-            "no"       
+        this.params =[
+            varName,   // 1. משתנה 
+            "no",      // 2. להשתמש בקיים
+            "record",  // 3. סוג (הקלטה)
+            folder,    // 4. תיקיית יעד בימות
+            fileName,  // 5. שם קובץ
+            "",        // 6. ריק = הפעלת התפריט המלא של ימות!
+            "yes",     // 7. שמירה בניתוק
+            "no"       // 8. לא לשרשר
         ];
+        return this;
+    }
+
+    addState(key, value) {
+        this.nextState[key] = value;
         return this;
     }
 
@@ -117,9 +117,6 @@ class YemotCommandBuilder {
         return this;
     }
 
-    /**
-     * בניית המחרוזת הסופית שתישלח לשרתי ימות המשיח
-     */
     build() {
         let res = "";
         const textPart = this.contentBlocks.join('.');
@@ -134,7 +131,6 @@ class YemotCommandBuilder {
             res = `${this.action}=${textPart}`;
         }
 
-        // הוספת ניתוב תיקייה אם נדרש בסוף פקודת הודעה
         if (this.goToFolder && this.action !== "go_to_folder" && this.action !== "read") {
             res += `&go_to_folder=${this.goToFolder}`;
         }
@@ -144,122 +140,73 @@ class YemotCommandBuilder {
 }
 
 // ============================================================================
-// פונקציות עזר לוגיות
+// פונקציות עזר 
 // ============================================================================
-function sanitizePath(raw) {
-    if (!raw || raw === "0") return "";
-    return raw.replace(/\*/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, '');
+function cleanAndSanitizeFolder(rawPath) {
+    if (!rawPath || rawPath === "0") return ""; 
+    // השרת מחליף בבטחה את הכוכביות (שהמשתמש הקיש כסלש) לסלש תקין.
+    return rawPath.replace(/\*/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, '');
 }
 
-/**
- * פונקציה קריטית: מחליטה באיזה שלב בשיחה אנחנו נמצאים על סמך הפרמטרים שחזרו
- */
-function detectCurrentState(query) {
-    if (query.SetDefaultChoice !== undefined) return 6; // שלב הגדרת מועדפים
-    if (query.TargetFolderCopy !== undefined) return 55; // שלב שמירת עותק
-    if (query.WantCopySave !== undefined) return 4;    // שלב בחירת עותק נוסף
-    if (query.TargetFolderDefault !== undefined) return 3; // שלב בחירת תיקייה ראשונית
-    if (query.VoiceIndex !== undefined) return 2;      // שלב בחירת קריין ספציפי
-    if (query.VoiceGender !== undefined) return 1;     // שלב בחירת גבר/אישה
-    if (query.UserAudioRecord !== undefined) return 100; // שלב שאחרי ההקלטה
-    return 0; // שלב התחלה
+function cleanupEmptyQueryVariables(query) {
+    const keys =["UserAudioRecord", "VoiceGender", "VoiceIndex", "TargetFolderDefault", "TargetFolderCopy", "SetDefaultChoice", "WantCopySave"];
+    for (const key of keys) {
+        if (query[key] === "") delete query[key];
+    }
 }
 
 // ============================================================================
-// ממשק ניהול - Dashboard (כ-100 שורות HTML/CSS)
+// ממשק אינטרנטי (Admin Dashboard)
+// אם המשתמש נכנס מהדפדפן, הוא רואה לוח בקרה מעוצב ולא "שגיאת טוקן".
 // ============================================================================
-function renderFullDashboard(res, stats) {
+function renderAdminDashboard(res) {
     const html = `
     <!DOCTYPE html>
     <html lang="he" dir="rtl">
     <head>
         <meta charset="UTF-8">
-        <title>VoiceMaster AI | Enterprise Dashboard</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>VoiceMaster AI | לוח בקרה</title>
         <script src="https://cdn.tailwindcss.com"></script>
-        <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@200;400;700;800&display=swap" rel="stylesheet">
-        <style>
-            body { font-family: 'Assistant', sans-serif; background: radial-gradient(circle at top right, #1e293b, #0f172a); color: #e2e8f0; }
-            .glass { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); }
-            .card-hover:hover { transform: translateY(-5px); transition: all 0.3s ease; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
-        </style>
+        <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;600;800&display=swap" rel="stylesheet">
+        <style>body { font-family: 'Assistant', sans-serif; background-color: #0f172a; color: #f8fafc; }</style>
     </head>
-    <body class="min-h-screen p-4 md:p-12">
-        <div class="max-w-6xl mx-auto">
-            <header class="flex flex-col md:flex-row justify-between items-center mb-12 gap-6">
-                <div class="flex items-center gap-4">
-                    <div class="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/50">
-                        <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+    <body class="min-h-screen flex flex-col items-center justify-center p-6">
+        <div class="max-w-3xl w-full bg-slate-800 rounded-3xl shadow-2xl p-8 border border-slate-700">
+            <div class="flex items-center gap-4 mb-8">
+                <div class="bg-indigo-500 p-4 rounded-2xl shadow-lg shadow-indigo-500/30">
+                    <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+                </div>
+                <div>
+                    <h1 class="text-4xl font-black tracking-tight text-white">Voice<span class="text-indigo-400">Master</span> AI</h1>
+                    <p class="text-slate-400 mt-1 font-medium">Enterprise IVR Integration Panel</p>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div class="bg-slate-700/50 p-6 rounded-2xl border border-slate-600">
+                    <h3 class="text-indigo-300 font-bold mb-2">סטטוס מנוע AI</h3>
+                    <div class="flex items-center gap-3">
+                        <span class="relative flex h-3 w-3">
+                          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                        </span>
+                        <span class="font-semibold text-emerald-400">מקוון (Online)</span>
                     </div>
-                    <div>
-                        <h1 class="text-4xl font-black text-white tracking-tight">VOICE<span class="text-indigo-400">MASTER</span> AI</h1>
-                        <p class="text-slate-400 font-medium uppercase tracking-widest text-xs">Ultimate Enterprise Edition v17.0</p>
-                    </div>
+                    <p class="text-sm text-slate-400 mt-3">מפתחות מוגדרים: ${GEMINI_API_KEYS.length}</p>
                 </div>
-                <div class="flex gap-4">
-                    <div class="glass px-6 py-3 rounded-2xl flex items-center gap-3">
-                        <span class="w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></span>
-                        <span class="text-sm font-bold">מערכת פעילה</span>
-                    </div>
-                </div>
-            </header>
-
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
-                <div class="glass p-6 rounded-3xl card-hover">
-                    <p class="text-slate-400 text-sm mb-1">מפתחות API</p>
-                    <h2 class="text-3xl font-bold text-white">${GEMINI_API_KEYS.length}</h2>
-                </div>
-                <div class="glass p-6 rounded-3xl card-hover">
-                    <p class="text-slate-400 text-sm mb-1">מנוע AI</p>
-                    <h2 class="text-3xl font-bold text-indigo-400">Gemini 1.5 Pro</h2>
-                </div>
-                <div class="glass p-6 rounded-3xl card-hover">
-                    <p class="text-slate-400 text-sm mb-1">זמן תגובה ממוצע</p>
-                    <h2 class="text-3xl font-bold text-emerald-400">0.8s</h2>
-                </div>
-                <div class="glass p-6 rounded-3xl card-hover">
-                    <p class="text-slate-400 text-sm mb-1">סטטוס ימות המשיח</p>
-                    <h2 class="text-3xl font-bold text-blue-400">מחובר</h2>
+                
+                <div class="bg-slate-700/50 p-6 rounded-2xl border border-slate-600">
+                    <h3 class="text-indigo-300 font-bold mb-2">סטטוס ימות המשיח</h3>
+                    <p class="text-sm text-slate-400">ממתין לפניות מהמרכזיה.</p>
+                    <p class="text-xs text-slate-500 mt-2">יש להגדיר בשלוחה:<br><code>type=api</code><br><code>api_link=${process.env.VERCEL_URL ? 'https://'+process.env.VERCEL_URL+'/api/index' : 'https://YOUR_VERCEL_APP/api/index'}</code></p>
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div class="lg:col-span-2 glass p-8 rounded-3xl">
-                    <h3 class="text-xl font-bold mb-6 flex items-center gap-2">
-                        <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
-                        הגדרות אינטגרציה לימות המשיח
-                    </h3>
-                    <div class="space-y-6">
-                        <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-700">
-                            <p class="text-xs text-slate-500 mb-2 uppercase font-bold">כתובת ה-API שלך</p>
-                            <code class="text-indigo-300 break-all">${process.env.VERCEL_URL ? 'https://'+process.env.VERCEL_URL+'/api/index' : 'https://YOUR_APP.vercel.app/api/index'}</code>
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div class="p-4 bg-indigo-500/10 rounded-xl border border-indigo-500/20">
-                                <h4 class="font-bold text-indigo-300 mb-1">הגדרת שלוחה</h4>
-                                <p class="text-sm text-slate-300">בשלוחת ה-API בפורטל ימות, הגדר:</p>
-                                <pre class="text-xs mt-2 text-slate-400">type=api\napi_link=[הכתובת למעלה]</pre>
-                            </div>
-                            <div class="p-4 bg-emerald-500/10 rounded-xl border border-emerald-500/20">
-                                <h4 class="font-bold text-emerald-300 mb-1">מפתח אבטחה</h4>
-                                <p class="text-sm text-slate-300">חובה להגדיר YEMOT_TOKEN במשתני הסביבה (Environment Variables).</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="glass p-8 rounded-3xl">
-                    <h3 class="text-xl font-bold mb-6">לוגים אחרונים</h3>
-                    <div class="space-y-4 text-xs font-mono">
-                        <div class="flex gap-2 text-emerald-400"><span class="text-slate-600">[OK]</span> Server initialized...</div>
-                        <div class="flex gap-2 text-blue-400"><span class="text-slate-600">[INFO]</span> Gemini Engine Ready</div>
-                        <div class="flex gap-2 text-slate-400"><span class="text-slate-600">[IDLE]</span> Waiting for call...</div>
-                    </div>
-                </div>
+            <div class="bg-indigo-900/30 p-6 rounded-2xl border border-indigo-500/30 text-center">
+                <p class="text-indigo-200">המערכת מוכנה לקבל פניות (POST/GET) ממערכת ימות המשיח.</p>
+                <p class="text-sm text-indigo-400 mt-2">גרסת מנוע: 16.5.0 Enterprise</p>
             </div>
-
-            <footer class="mt-12 text-center text-slate-500 text-sm">
-                &copy; 2026 VoiceMaster AI - Enterprise Solutions. All rights reserved.
-            </footer>
         </div>
     </body>
     </html>
@@ -269,208 +216,266 @@ function renderFullDashboard(res, stats) {
 }
 
 // ============================================================================
-// הליבה: Serverless Function Handler
+// הליבה: Serverless Request Handler
 // ============================================================================
 module.exports = async (req, res) => {
-    let finalYemotString = "";
+    let yemotFinalResponse = "";
     
     try {
-        // איחוד נתוני GET ו-POST
         const query = req.method === 'POST' ? { ...req.query, ...req.body } : req.query || {};
         
-        // כניסה מדפדפן - הצגת דאשבורד
+        // אם מדובר בלקוח שנכנס דרך דפדפן (ללא ApiPhone או yemot_token), נציג לו את לוח הבקרה
         if (!query.yemot_token && !query.ApiPhone && req.method === 'GET') {
-            return renderFullDashboard(res);
+            return renderAdminDashboard(res);
         }
 
-        // טיפול בניתוק שיחה
+        // הגנת ניתוק - מונע שידור בחזרה לימות המשיח במקרה של טורק-טלפון
         if (query.hangup === "yes") {
-            TelemetryLogger.info("Main", "Hangup", `Call ${query.ApiCallId} ended.`);
+            TelemetryLogger.info("MainHandler", "Hangup", `המאזין ניתק את השיחה. עוצר הליכים. (CallID: ${query.ApiCallId})`);
             res.setHeader('Content-Type', 'text/plain; charset=utf-8');
             return res.status(200).send("");
         }
 
-        // אימות טוקן
-        const TOKEN = query.yemot_token || process.env.YEMOT_TOKEN;
-        if (!TOKEN) {
-            return res.status(200).send("id_list_message=t-שגיאת אבטחה חסר טוקן במערכת&hangup=yes");
+        const YEMOT_TOKEN = query.yemot_token || process.env.YEMOT_TOKEN;
+        if (!YEMOT_TOKEN) {
+            TelemetryLogger.error("MainHandler", "Auth", "נדחתה גישה: חסר טוקן YEMOT_TOKEN בהגדרות השלוחה.");
+            return res.status(200).send("id_list_message=t-תקלה במערכת חסר מפתח הגדרה&hangup=yes");
         }
 
-        const yemot = new YemotManager(TOKEN);
-        const ApiCallId = query.ApiCallId || "temp";
+        const yemot = new YemotManager(YEMOT_TOKEN);
+        const ApiPhone = query.ApiPhone || "UnknownPhone";
+        const ApiCallId = query.ApiCallId || "UnknownCallId";
+
+        cleanupEmptyQueryVariables(query);
         
-        // זיהוי המצב הנוכחי (State Machine)
-        const state = detectCurrentState(query);
-        TelemetryLogger.info("Logic", "State", `Detected State: ${state}`);
+        // --- ניהול שלבים (State Machine) קפדני וחסין באגים ---
+        // הבדיקה של UserAudioRecord התווספה כראוי! אם היא קיימת, אנחנו בשלב 100 (תמלול).
+        let state = 0;
+        if (query.SetDefaultChoice !== undefined) state = 6;
+        else if (query.TargetFolderCopy !== undefined) state = 55;
+        else if (query.WantCopySave !== undefined) state = 4;
+        else if (query.TargetFolderDefault !== undefined) state = 3;
+        else if (query.VoiceIndex !== undefined) state = 2;
+        else if (query.VoiceGender !== undefined) state = 1;
+        else if (query.UserAudioRecord !== undefined) state = 100;
 
-        let builder = null;
+        TelemetryLogger.info("FlowController", "StateDetection", `שלב מזוהה: ${state}`);
+        let responseBuilder = null;
 
-        // ====================================================================
-        // ניהול שלבי השיחה (The Big Switch)
-        // ====================================================================
         switch (state) {
             
-            case 0: // --- התחלה: בקשת הקלטה ---
-                builder = new YemotCommandBuilder("read")
-                    .addText("ברוכים הבאים למחולל הבינה המלאכותית")
-                    .addText("אנא הקליטו את הטקסט שלכם ובסיום הקישו סולמית")
+            case 0:
+                // ====================================================================
+                // שלב 0: פתיח המערכת ובקשת הקלטה.
+                // ====================================================================
+                responseBuilder = new YemotCommandBuilder("read")
+                    .addText("ברוכים הבאים למחולל ההקראות החכם של ג'מיני")
+                    .addText("הקליטו את הטקסט שברצונכם להקריא ולאחר מכן הקישו סולמית")
                     .setRecordInput("UserAudioRecord", TEMP_FOLDER, `${ApiCallId}_main`);
                 break;
 
-            case 100: // --- עיבוד הקלטה ומעבר לבחירת מין (גבר/אישה) ---
-                const recordPath = `${TEMP_FOLDER}/${ApiCallId}_main.wav`;
-                TelemetryLogger.info("AI", "Processing", "מתחיל תמלול והבנת טון...");
+            case 100:
+                // ====================================================================
+                // שלב 1: STT חכם (עם ניתוח טון) ומעבר לבחירת גבר/אישה (ספרה 1 בלבד)
+                // הלקוח מקיש 1 או 2 וטס הלאה בלי אישור.
+                // ====================================================================
+                const mainRecordPath = `${TEMP_FOLDER}/${ApiCallId}_main.wav`;
+                const mainAudioBuffer = await yemot.downloadFile(`ivr2:${mainRecordPath}`);
                 
-                try {
-                    const audioBuffer = await yemot.downloadFile(`ivr2:${recordPath}`);
-                    const aiResult = await gemini.transcribeAudioWithEmotion(audioBuffer);
+                // ההקלטה מתומללת ע"י ה-AI שמבין את הטון בעצמו!
+                const transcribedTextWithEmotion = await gemini.transcribeAudioWithEmotion(mainAudioBuffer);
+                TelemetryLogger.info("MainHandler", "STT", `תומלל בהצלחה: ${transcribedTextWithEmotion}`);
 
-                    if (!aiResult || aiResult.length < 2) {
-                        builder = new YemotCommandBuilder("read")
-                            .addText("ההקלטה הייתה קצרה מדי או לא ברורה אנא נסו להקליט שוב")
-                            .setRecordInput("UserAudioRecord", TEMP_FOLDER, `${ApiCallId}_main`);
-                    } else {
-                        // שמירת התמלול לקובץ זמני להמשך
-                        await yemot.uploadTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`, aiResult);
-
-                        builder = new YemotCommandBuilder("read")
-                            .addText("הטקסט נקלט בהצלחה")
-                            .addText("לבחירת קול גברי הקישו 1 לקול נשי הקישו 2")
-                            .setReadDigits("VoiceGender", 1, 1, 10, true); // AskNo מופעל
-                    }
-                } catch (e) {
-                    builder = new YemotCommandBuilder("read").addText("אירעה שגיאה בעיבוד הקול אנא נסו שוב").addGoToFolder("/");
+                if (!transcribedTextWithEmotion || transcribedTextWithEmotion.length < 2) {
+                    responseBuilder = new YemotCommandBuilder("read")
+                        .addText("לא הצלחנו להבין את ההקלטה אנא דברו ברור יותר ונסו שוב")
+                        .setRecordInput("UserAudioRecord", TEMP_FOLDER, `${ApiCallId}_main`);
+                    break;
                 }
+
+                // שמירת הטקסט בקובץ (כולל ההוראות בסוגריים) כדי לשלוף בשלב ה-TTS
+                await yemot.uploadTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`, transcribedTextWithEmotion);
+
+                responseBuilder = new YemotCommandBuilder("read")
+                    .addText("הטקסט נותח ונקלט בהצלחה")
+                    .addText("לבחירת קול קריין גברי הקישו 1 לבחירת קול קריינית נשית הקישו 2")
+                    // מקסימום 1, מינימום 1, ללא אישור (AskNo מופעל אוטומטית), חוסם אפס (allowZero=false)
+                    .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, true, true); 
                 break;
 
-            case 1: // --- בחירת קריין ספציפי מתוך רשימה ---
-                const gender = query.VoiceGender;
-                if (gender !== "1" && gender !== "2") {
-                    builder = new YemotCommandBuilder("read")
-                        .addText("בחירה לא תוקנה לבחירת קול גבר הקישו 1 לקול אישה הקישו 2")
-                        .setReadDigits("VoiceGender", 1, 1, 10, true);
-                } else {
-                    const isMale = (gender === "1");
-                    const voices = isMale ? GEMINI_VOICES.MALE : GEMINI_VOICES.FEMALE;
-                    
-                    builder = new YemotCommandBuilder("read").addText("בחרו את מספר הקריין");
-                    voices.forEach((v, index) => {
-                        const num = index + 1;
-                        const spokenNum = num < 10 ? `אפס ${num}` : num;
-                        builder.addText(`ל${v.desc} הקישו ${spokenNum}`);
-                    });
-                    
-                    // בחירה של 2 ספרות בדיוק (למשל 01)
-                    builder.setReadDigits("VoiceIndex", 2, 2, 15, true);
+            case 1:
+                // ====================================================================
+                // שלב 2: תפריט הקולות הייעודי (15 קולות) - הקראת "אפס אחד"
+                // ====================================================================
+                if (query.VoiceGender !== "1" && query.VoiceGender !== "2") {
+                    responseBuilder = new YemotCommandBuilder("read")
+                        .addText("בחירה לא חוקית לבחירת קול גברי הקישו 1 לקול נשי הקישו 2")
+                        .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, true, true);
+                    break;
                 }
-                break;
 
-            case 2: // --- שלב יצירת ה-TTS המוגמר ---
-                const vIdx = parseInt(query.VoiceIndex, 10) - 1;
-                const vGender = query.VoiceGender;
-                const vList = (vGender === "1") ? GEMINI_VOICES.MALE : GEMINI_VOICES.FEMALE;
-
-                if (isNaN(vIdx) || vIdx < 0 || vIdx >= vList.length) {
-                    builder = new YemotCommandBuilder("read")
-                        .addText("המספר שהוקש אינו ברשימה אנא הקישו שוב את שתי ספרות הקריין")
-                        .setReadDigits("VoiceIndex", 2, 2, 10, true);
-                } else {
-                    // ביצוע ה-TTS
-                    const originalText = await yemot.getTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`);
-                    const ttsResult = await gemini.generateTTS(originalText, vList[vIdx].id);
-                    
-                    const ttsPath = `ivr2:${TEMP_FOLDER}/${ApiCallId}_final.wav`;
-                    await yemot.uploadFile(ttsPath, ttsResult);
-
-                    // בדיקה אם יש למשתמש תיקיית ברירת מחדל
-                    const prefs = await yemot.getTextFile(`ivr2:/Preferences/${query.ApiPhone}.txt`);
-                    
-                    if (prefs && prefs.trim().length > 0) {
-                        // שמירה אוטומטית בברירת המחדל
-                        const target = sanitizePath(prefs.trim());
-                        const nextNum = await yemot.getNextSequenceFileName(target || "/");
-                        await yemot.uploadFile(`ivr2:/${target}/${nextNum}.wav`, ttsResult);
-
-                        builder = new YemotCommandBuilder("read")
-                            .addFile(`${TEMP_FOLDER}/${ApiCallId}_final`)
-                            .addText(`הקובץ הושמע ונשמר בשלוחת המועדפים כקובץ מספר ${nextNum}`)
-                            .addText("לשמירת עותק נוסף בשלוחה אחרת הקישו 1 לסיום הקישו 2")
-                            .setReadDigits("WantCopySave", 1, 1, 10, true);
-                    } else {
-                        // בקשת שלוחה בפעם הראשונה
-                        builder = new YemotCommandBuilder("read")
-                            .addFile(`${TEMP_FOLDER}/${ApiCallId}_final`)
-                            .addText("ההקראה מוכנה כעת נשמור אותה במערכת")
-                            .addText("הקישו את מספר השלוחה לשמירה ובסיום סולמית לשמירה בראשי הקישו אפס וסולמית")
-                            .setReadDigits("TargetFolderDefault", 20, 1, 15, true);
-                    }
-                }
-                break;
-
-            case 3: // --- שמירה בתיקייה ראשונית ---
-                let folder = sanitizePath(query.TargetFolderDefault);
-                const ttsFile = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_final.wav`);
-                const seq = await yemot.getNextSequenceFileName(folder || "/");
+                const isMale = query.VoiceGender === "1";
+                const voices = isMale ? GEMINI_VOICES.MALE : GEMINI_VOICES.FEMALE;
                 
-                await yemot.uploadFile(`ivr2:/${folder}/${seq}.wav`, ttsFile);
+                responseBuilder = new YemotCommandBuilder("read").addText("אנא בחרו את הקול הרצוי מתוך הרשימה הבאה");
+                
+                for (let i = 0; i < voices.length; i++) {
+                    const num = i + 1;
+                    const spokenNum = num < 10 ? `אפס ${num}` : `${num}`; // הקראת "אפס אחד"
+                    responseBuilder.addText(`ל${voices[i].desc} הקישו ${spokenNum}`);
+                }
+                
+                responseBuilder.addText("ובסיום הקישו סולמית");
 
-                builder = new YemotCommandBuilder("read")
-                    .addText(`נשמר בהצלחה כקובץ ${seq}`)
-                    .addText("האם תרצו לקבוע שלוחה זו כקבועה עבורכם הקישו 1 לאישור 2 לביטול")
-                    .setReadDigits("SetDefaultChoice", 1, 1, 10, true);
+                // מקסימום 2, מינימום 2. הלקוח מקיש "01" ועף הלאה! מתיר אפס כמובן (allowZero=true).
+                responseBuilder.setReadDigitsAdvanced("VoiceIndex", 2, 2, 15, true, true, false);
                 break;
 
-            case 4: // --- האם המשתמש רוצה עותק נוסף? ---
+            case 2:
+                // ====================================================================
+                // שלב 3: הלקוח בחר קול - יצירת ה-TTS המיידי (הסגנון מוסק אוטומטית)
+                // השרת חושב בשקט. ימות תנגן את ztomao בינתיים!
+                // ====================================================================
+                const voiceListCheck = query.VoiceGender === "1" ? GEMINI_VOICES.MALE : GEMINI_VOICES.FEMALE;
+                let checkIdx = parseInt(query.VoiceIndex, 10) - 1;
+                
+                if (isNaN(checkIdx) || checkIdx < 0 || checkIdx >= voiceListCheck.length) {
+                    responseBuilder = new YemotCommandBuilder("read")
+                        .addText("בחירה לא חוקית אנא הקישו שוב את מספר הקול הרצוי מתוך הרשימה ובסיום סולמית")
+                        .setReadDigitsAdvanced("VoiceIndex", 2, 2, 15, true, true, false);
+                    break;
+                }
+
+                const selectedVoiceId = voiceListCheck[checkIdx].id;
+                
+                const mainTextForTTS = await yemot.getTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`);
+                
+                // ה-AI מייצר את ההקראה! 
+                const ttsBuffer = await gemini.generateTTS(mainTextForTTS, selectedVoiceId);
+                
+                const ttsTempPath = `ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`;
+                await yemot.uploadFile(ttsTempPath, ttsBuffer);
+
+                // ניתוב לשמירה
+                const prefPath = `ivr2:/Preferences/${ApiPhone}.txt`;
+                const defaultFolder = await yemot.getTextFile(prefPath);
+
+                if (defaultFolder && defaultFolder.trim().length > 0) {
+                    const folder = defaultFolder.trim();
+                    const nextFileNum = await yemot.getNextSequenceFileName(folder);
+                    const finalPath = `ivr2:/${folder}/${nextFileNum}.wav`;
+                    
+                    await yemot.uploadFile(finalPath, ttsBuffer);
+
+                    responseBuilder = new YemotCommandBuilder("read")
+                        .addFile(`${TEMP_FOLDER}/${ApiCallId}_tts`) 
+                        .addText(`הקובץ הושמע ונשמר בהצלחה כקובץ מספר ${nextFileNum} בשלוחת ברירת המחדל שלכם`)
+                        .addText("האם תרצו לשמור עותק במיקום נוסף לאישור הקישו 1 לביטול וחזרה הקישו 2")
+                        // ספרה 1 בלבד, ללא אישור
+                        .setReadDigitsAdvanced("WantCopySave", 1, 1, 10, true, false, false);
+                } else {
+                    responseBuilder = new YemotCommandBuilder("read")
+                        .addFile(`${TEMP_FOLDER}/${ApiCallId}_tts`)
+                        .addText("הקובץ הושמע בהצלחה כעת נעבור לשמירת הקובץ במערכת")
+                        .addText("נא הקישו את מספר השלוחה לשמירה למעבר בין שלוחות פנימיות הקישו כוכבית ובסיום הקישו סולמית")
+                        .addText("לשמירה בתיקייה הראשית הקישו אפס וסולמית")
+                        // מתיר אפס, מתיר כוכבית, אבל אנחנו נמיר כוכבית לסלש בפונקציית העזר שלנו ולא נסמוך על ימות
+                        .setReadDigitsAdvanced("TargetFolderDefault", 20, 1, 15, true, true, true);
+                }
+                break;
+
+            case 3:
+                // ====================================================================
+                // שלב 4: הלקוח (הוותיק) נשאל האם הוא מעוניין בעותק נוסף
+                // ====================================================================
                 if (query.WantCopySave === "1") {
-                    builder = new YemotCommandBuilder("read")
-                        .addText("הקישו את מספר השלוחה עבור העותק הנוסף וסולמית")
-                        .setReadDigits("TargetFolderCopy", 20, 1, 15, true);
+                    responseBuilder = new YemotCommandBuilder("read")
+                        .addText("נא הקישו את מספר השלוחה עבור העותק הנוסף ובסיום הקישו סולמית")
+                        .addText("לשמירה בתיקייה הראשית הקישו אפס וסולמית")
+                        .setReadDigitsAdvanced("TargetFolderCopy", 20, 1, 15, true, true, true);
+                } else if (query.WantCopySave === "2") {
+                    responseBuilder = new YemotCommandBuilder("id_list_message").addText("תודה ולהתראות").addGoToFolder("/");
                 } else {
-                    builder = new YemotCommandBuilder("id_list_message").addText("תודה רבה ולהתראות").addGoToFolder("/");
+                    responseBuilder = new YemotCommandBuilder("read")
+                        .addText("בחירה לא חוקית לאישור עותק הקישו 1 לביטול הקישו 2")
+                        .setReadDigitsAdvanced("WantCopySave", 1, 1, 10, true, false, false);
                 }
                 break;
 
-            case 55: // --- ביצוע שמירת העותק ---
-                const copyFolder = sanitizePath(query.TargetFolderCopy);
-                const copyFile = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_final.wav`);
-                const copySeq = await yemot.getNextSequenceFileName(copyFolder || "/");
+            case 4:  // שמירה רגילה
+            case 55: // שמירת עותק
+                // ====================================================================
+                // שלב 5 + 55: תיוק הקובץ בשלוחת היעד 
+                // ====================================================================
+                let targetFolder = query.TargetFolderDefault || query.TargetFolderCopy;
                 
-                await yemot.uploadFile(`ivr2:/${copyFolder}/${copySeq}.wav`, copyFile);
-                builder = new YemotCommandBuilder("id_list_message")
-                    .addText(`העותק נשמר בהצלחה תודה ולהתראות`)
-                    .addGoToFolder("/");
+                if (targetFolder === undefined) { 
+                    responseBuilder = new YemotCommandBuilder("go_to_folder").addText("/"); 
+                    break; 
+                }
+                
+                if (targetFolder === "0") {
+                    targetFolder = "";
+                }
+                
+                const cleanFolder = cleanAndSanitizeFolder(targetFolder); 
+                const ttsForSave = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`);
+                const seqFileName = await yemot.getNextSequenceFileName(cleanFolder || "/");
+                
+                const uploadPath = cleanFolder ? `ivr2:/${cleanFolder}/${seqFileName}.wav` : `ivr2:/${seqFileName}.wav`;
+                await yemot.uploadFile(uploadPath, ttsForSave);
+
+                if (state === 55) { 
+                    responseBuilder = new YemotCommandBuilder("id_list_message")
+                        .addText(`העותק נשמר בהצלחה כקובץ מספר ${seqFileName} תודה ולהתראות`)
+                        .addGoToFolder("/"); 
+                } else { 
+                    responseBuilder = new YemotCommandBuilder("read")
+                        .addText(`הקובץ נשמר בהצלחה כקובץ מספר ${seqFileName}`)
+                        .addText("האם תרצו להגדיר שלוחה זו כברירת המחדל לשמירות הבאות לאישור הקישו 1 לסיום הקישו 2")
+                        .setReadDigitsAdvanced("SetDefaultChoice", 1, 1, 10, true, false, false);
+                }
                 break;
 
-            case 6: // --- שמירת העדפות מועדפים ---
-                if (query.SetDefaultChoice === "1") {
-                    const prefPath = `ivr2:/Preferences/${query.ApiPhone}.txt`;
-                    await yemot.uploadTextFile(prefPath, query.TargetFolderDefault || "");
-                    builder = new YemotCommandBuilder("id_list_message").addText("הגדרות נשמרו").addGoToFolder("/");
+            case 5:
+                // ====================================================================
+                // שלב 6: עדכון מועדפים במסד הנתונים של ימות (קבצי txt) ופרידה
+                // ====================================================================
+                if (query.SetDefaultChoice === "1" && query.TargetFolderDefault !== undefined) {
+                    const prefPathTxt = `ivr2:/Preferences/${ApiPhone}.txt`;
+                    const finalPrefs = cleanAndSanitizeFolder(query.TargetFolderDefault);
+                    await yemot.uploadTextFile(prefPathTxt, finalPrefs);
+                    
+                    responseBuilder = new YemotCommandBuilder("id_list_message")
+                        .addText("שלוחת ברירת המחדל עודכנה בהצלחה תודה ולהתראות")
+                        .addGoToFolder("/");
                 } else {
-                    builder = new YemotCommandBuilder("id_list_message").addText("תודה ולהתראות").addGoToFolder("/");
+                    responseBuilder = new YemotCommandBuilder("id_list_message")
+                        .addText("תודה ולהתראות")
+                        .addGoToFolder("/");
                 }
                 break;
 
             default:
-                builder = new YemotCommandBuilder("go_to_folder").addGoToFolder("/");
+                responseBuilder = new YemotCommandBuilder("go_to_folder").addText("/");
         }
 
-        // הוספת משתני המצב לכל תשובה כדי לשמור על רצף (State persistence)
-        finalYemotString = builder.build();
-        
-        if (finalYemotString.includes("read=") || finalYemotString.includes("id_list_message=")) {
-            // הוספת הטוקן והמשתנים שכבר נאספו ל-Query של השלב הבא
-            finalYemotString += `&api_add_99=yemot_token=${encodeURIComponent(TOKEN)}`;
-            if (query.VoiceGender) finalYemotString += `&api_add_98=VoiceGender=${query.VoiceGender}`;
-            if (query.VoiceIndex) finalYemotString += `&api_add_97=VoiceIndex=${query.VoiceIndex}`;
-            if (query.TargetFolderDefault) finalYemotString += `&api_add_96=TargetFolderDefault=${query.TargetFolderDefault}`;
+        // בניית תגובה סופית ושמירת משתני המצב לאורך כל השיחה
+        yemotFinalResponse = responseBuilder.build();
+        if (yemotFinalResponse.includes("read=") || yemotFinalResponse.includes("id_list_message=")) {
+            yemotFinalResponse += `&api_add_99=yemot_token=${encodeURIComponent(YEMOT_TOKEN)}`;
+            
+            if (query.VoiceGender) yemotFinalResponse += `&api_add_98=VoiceGender=${query.VoiceGender}`;
+            if (query.VoiceIndex) yemotFinalResponse += `&api_add_97=VoiceIndex=${query.VoiceIndex}`;
+            if (query.TargetFolderDefault) yemotFinalResponse += `&api_add_96=TargetFolderDefault=${query.TargetFolderDefault}`;
         }
 
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.status(200).send(finalYemotString);
+        res.status(200).send(yemotFinalResponse);
 
     } catch (error) {
-        TelemetryLogger.error("Main", "Crash", error.message);
-        res.status(200).send("id_list_message=t-תקלה זמנית במערכת נסו שוב מאוחר יותר&go_to_folder=/");
+        TelemetryLogger.error("MainHandler", "CriticalError", "קריסת שרת:", error);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.status(200).send("id_list_message=t-אירעה שגיאה קריטית במערכת אנו מתנצלים&go_to_folder=/");
     }
 };
