@@ -3,7 +3,6 @@
  * @description תשתית Enterprise מלאה למערכת ה-IVR מבוססת Gemini וימות המשיח.
  * קובץ זה מכיל מחלקות תקשורת, ניהול שגיאות, מנועי עיבוד שמע (DSP ו-WAV Encoding), 
  * ומאגר קולות נרחב. הכל ללא תלויות חיצוניות (Zero Dependencies).
- * @version 3.0.0 Enterprise Edition
  */
 
 const https = require('https');
@@ -52,70 +51,31 @@ const GEMINI_VOICES = {
 // ============================================================================
 // 2. מנוע עיבוד שמע - WAV Encoder & DSP
 // ============================================================================
-/**
- * מחלקת WavEncoder - פותרת את בעיית ה"קובץ הפגום".
- * Gemini TTS מחזיר נתוני PCM RAW גולמיים. ימות המשיח דורשת קובץ WAV תקין עם כותרת (Header).
- * מחלקה זו לוקחת את ה-Base64 מ-Gemini ומרכיבה עליו כותרת RIFF/WAVE חוקית לחלוטין.
- */
 class WavEncoder {
-    /**
-     * @param {string} base64PCM - נתוני ה-PCM הגולמיים בפורמט Base64
-     * @param {number} sampleRate - תדר הדגימה (ברירת מחדל של ג'מיני היא 24000)
-     * @returns {Buffer} - באפר בינארי של קובץ WAV מושלם
-     */
     static encodeFromBase64(base64PCM, sampleRate = 24000) {
         console.log(`[WavEncoder] מתחיל קידוד כותרת WAV לקובץ. תדר: ${sampleRate}Hz`);
-        
-        // 1. המרת Base64 למערך בינארי גולמי
         const pcmBuffer = Buffer.from(base64PCM, 'base64');
-        
-        // 2. יצירת כותרת WAV באורך 44 בתים (Standard RIFF Header)
         const header = Buffer.alloc(44);
         
-        // ChunkID "RIFF"
         header.write('RIFF', 0);
-        // ChunkSize (36 + SubChunk2Size)
         header.writeUInt32LE(36 + pcmBuffer.length, 4);
-        // Format "WAVE"
         header.write('WAVE', 8);
-        
-        // Subchunk1ID "fmt "
         header.write('fmt ', 12);
-        // Subchunk1Size (16 for PCM)
         header.writeUInt32LE(16, 16);
-        // AudioFormat (1 for PCM)
         header.writeUInt16LE(1, 20);
-        // NumChannels (1 for Mono)
         header.writeUInt16LE(1, 22);
-        // SampleRate
         header.writeUInt32LE(sampleRate, 24);
-        // ByteRate (SampleRate * NumChannels * BitsPerSample/8)
         header.writeUInt32LE(sampleRate * 2, 28);
-        // BlockAlign (NumChannels * BitsPerSample/8)
         header.writeUInt16LE(2, 32);
-        // BitsPerSample (16-bit)
         header.writeUInt16LE(16, 34);
-        
-        // Subchunk2ID "data"
         header.write('data', 36);
-        // Subchunk2Size (length of PCM data)
         header.writeUInt32LE(pcmBuffer.length, 40);
         
-        // 3. חיבור הכותרת והנתונים לקובץ אחד
-        const finalWavBuffer = Buffer.concat([header, pcmBuffer]);
-        console.log(`[WavEncoder] קובץ ה-WAV נוצר בהצלחה. גודל סופי: ${finalWavBuffer.length} bytes`);
-        
-        return finalWavBuffer;
+        return Buffer.concat([header, pcmBuffer]);
     }
 }
 
-/**
- * מחלקת AudioProcessor - עיבוד שמע והגברה להקלטות מהטלפון (STT)
- */
 class AudioProcessor {
-    /**
-     * מנקה רעשי רקע של רשת סלולרית ומגביר את עוצמת השמע כדי שג'מיני יבין את המילים במדויק.
-     */
     static enhanceWavAudio(buffer, gainMultiplier = 4.0, noiseGateThreshold = 400) {
         try {
             if (buffer.length < 44 || buffer.toString('utf8', 0, 4) !== 'RIFF') {
@@ -127,21 +87,15 @@ class AudioProcessor {
 
             for (let i = dataOffset; i < newBuffer.length - 1; i += 2) {
                 let sample = newBuffer.readInt16LE(i);
-                
-                // Noise Gate - השתקת רעש לבן (Hiss)
                 if (Math.abs(sample) < noiseGateThreshold) {
                     sample = 0;
                 } else {
-                    // הגברת עוצמה (Gain Amplification)
                     sample = Math.round(sample * gainMultiplier);
-                    
-                    // מניעת עיוות (Hard Clipping)
                     if (sample > 32767) sample = 32767;
                     if (sample < -32768) sample = -32768;
                 }
                 newBuffer.writeInt16LE(sample, i);
             }
-            
             return newBuffer;
         } catch (error) {
             console.error("[DSP Error] שגיאה פנימית בתהליך ה-DSP:", error);
@@ -168,21 +122,12 @@ function makeHttpRequest(url, options, postData = null) {
             });
         });
 
-        req.on('error', (e) => {
-            console.error(`[HTTP Request Error] Failure attempting to reach ${url}:`, e);
-            reject(e);
-        });
-
-        if (postData) {
-            req.write(postData);
-        }
+        req.on('error', (e) => reject(e));
+        if (postData) req.write(postData);
         req.end();
     });
 }
 
-// ============================================================================
-// 4. מנהל שגיאות ו-Exponential Backoff
-// ============================================================================
 class RetryHandler {
     static async executeWithBackoff(fn, maxRetries = 3) {
         let retries = 0;
@@ -193,9 +138,7 @@ class RetryHandler {
                 return await fn();
             } catch (error) {
                 const isRateLimitOrServer = error.statusCode === 429 || error.statusCode >= 500;
-                
                 if (isRateLimitOrServer && retries < maxRetries - 1) {
-                    console.warn(`[RetryHandler] עומס שרת (${error.statusCode}). מנסה שוב בעוד ${delay}ms...`);
                     await new Promise(res => setTimeout(res, delay));
                     retries++;
                     delay *= 2; 
@@ -208,7 +151,7 @@ class RetryHandler {
 }
 
 // ============================================================================
-// 5. מחלקת תקשורת מתקדמת מול Gemini AI (STT & TTS)
+// 4. מחלקת תקשורת מתקדמת מול Gemini AI (STT & TTS)
 // ============================================================================
 class GeminiManager {
     constructor(apiKeys) {
@@ -225,13 +168,10 @@ class GeminiManager {
         return key;
     }
 
-    /**
-     * Speech to Text - המרת קובץ שמע לטקסט
-     * כולל אינטליגנציה רגשית (ניתוח טון והוספת הערות בסוגריים עגולים)
-     */
     async transcribeAudio(audioBuffer) {
         console.log("[Gemini] פתיחת תהליך תמלול STT והסקת טון דיבור...");
         
+        // הגברת השמע וניקוי רעשים לפני השליחה לג'מיני
         const enhancedBuffer = AudioProcessor.enhanceWavAudio(audioBuffer, 4.5, 350);
         const base64Audio = enhancedBuffer.toString('base64');
         
@@ -239,7 +179,6 @@ class GeminiManager {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${this.getRotateKey()}`;
             const options = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
             
-            // פרומפט מיוחד: תמלול + הסקת טון דיבור בתוך סוגריים עגולים
             const postData = JSON.stringify({
                 contents: [{
                     parts:[
@@ -261,10 +200,6 @@ class GeminiManager {
         throw new Error("Gemini returned an invalid STT response structure.");
     }
 
-    /**
-     * Text to Speech - יצירת אודיו מטקסט דרך Gemini
-     * עושה שימוש ב-WavEncoder כדי להבטיח קובץ חוקי שיתנגן בימות המשיח.
-     */
     async generateTTS(text, voiceName) {
         console.log(`[Gemini TTS] יוצר הקראה TTS. קול: ${voiceName}...`);
         
@@ -274,7 +209,6 @@ class GeminiManager {
             
             const payload = {
                 contents:[{ parts: [{ text: text }] }],
-                // שים לב: systemInstruction הוסר מכאן לחלוטין למניעת שגיאת 400.
                 generationConfig: {
                     responseModalities:["AUDIO"],
                     speechConfig: {
@@ -292,12 +226,8 @@ class GeminiManager {
         const result = await RetryHandler.executeWithBackoff(operation);
         
         try {
-            // הנתונים שחוזרים מכאן הם PCM גולמי ללא כותרת
             const base64Data = result.candidates[0].content.parts[0].inlineData.data;
-            
-            // קוראים למחלקה שיצרנו כדי להלביש כותרת WAV תקנית על ה-PCM
             const finalWavBuffer = WavEncoder.encodeFromBase64(base64Data, 24000);
-            
             return finalWavBuffer;
         } catch (e) {
             console.error("[Gemini TTS Error] שגיאה בשליפת האודיו מהתגובה:", JSON.stringify(result));
@@ -307,7 +237,7 @@ class GeminiManager {
 }
 
 // ============================================================================
-// 6. מחלקת תקשורת ושליטה בימות המשיח
+// 5. מחלקת תקשורת ושליטה בימות המשיח
 // ============================================================================
 class YemotManager {
     constructor(token) {
