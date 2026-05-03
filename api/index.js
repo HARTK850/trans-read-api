@@ -253,13 +253,14 @@ module.exports = async (req, res) => {
         // --- ניהול שלבים (State Machine) קפדני וחסין באגים ---
         // הבדיקה של UserAudioRecord התווספה כראוי! אם היא קיימת, אנחנו בשלב 100 (תמלול).
         let state = 0;
-        if (query.SetDefaultChoice !== undefined) state = 6;
-        else if (query.TargetFolderCopy !== undefined) state = 55;
-        else if (query.WantCopySave !== undefined) state = 4;
-        else if (query.TargetFolderDefault !== undefined) state = 3;
-        else if (query.VoiceIndex !== undefined) state = 2;
-        else if (query.VoiceGender !== undefined) state = 1;
-        else if (query.UserAudioRecord !== undefined) state = 100;
+
+if (query.SetDefaultChoice !== undefined) state = 5;
+else if (query.TargetFolderCopy !== undefined) state = 55;
+else if (query.WantCopySave !== undefined) state = 3;
+else if (query.TargetFolderDefault !== undefined) state = 4;
+else if (query.VoiceIndex !== undefined) state = 2;
+else if (query.VoiceGender !== undefined) state = 1;
+else if (query.UserAudioRecord !== undefined) state = 100;
 
         TelemetryLogger.info("FlowController", "StateDetection", `שלב מזוהה: ${state}`);
         let responseBuilder = null;
