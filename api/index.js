@@ -59,24 +59,29 @@ class YemotCommandBuilder {
      * מבוסס על מבנה מדויק של 9 פרמטרים.
      * 1:שם, 2:שימוש בקיים(no), 3:סוג(Digits), 4:מקסימום, 5:מינימום, 6:זמן, 7:הקראה(No), 8:חסימת כוכבית, 9:חסימת אפס.
      */
-    setReadDigitsAdvanced(varName, maxDigits, minDigits, timeout, disableConfirmation = true, blockAsterisk = true, allowZero = false) {
-        const playType = disableConfirmation ? "No" : "Digits"; // No (n גדולה, o קטנה) מבטל "הקשת X"
-        const blockStar = blockAsterisk ? "yes" : "no";
-        const blockZero = allowZero ? "no" : "yes"; // אם allowZero הוא true, נגיד no לחסימה
+    setReadDigitsAdvanced(
+    varName,
+    maxDigits,
+    minDigits,
+    timeout,
+    disableConfirmation = true,
+    allowStar = true,
+    allowZero = true
+) {
+    this.params = [
+        varName,                         // 1
+        "no",                           // 2
+        maxDigits.toString(),           // 3
+        minDigits.toString(),           // 4
+        timeout.toString(),             // 5
+        "Digits",                       // 6
+        disableConfirmation ? "No" : "Ok", // 7
+        allowStar ? "yes" : "no",      // 8
+        allowZero ? "yes" : "no"       // 9
+    ];
 
-        this.params =[
-            varName,               // 1. משתנה
-            "no",                  // 2. שימוש בקיים
-            "Digits",              // 3. סוג
-            maxDigits.toString(),  // 4. מקסימום 
-            minDigits.toString(),  // 5. מינימום
-            timeout.toString(),    // 6. זמן המתנה
-            playType,              // 7. צורת השמעה (No) מונע "לאישור הקישו 1"
-            blockStar,             // 8. חסימת כוכבית
-            blockZero              // 9. חסימת אפס
-        ];
-        return this;
-    }
+    return this;
+}
 
     /**
      * הגדרת קלט הקלטה (Record). מפעיל את התפריט הרשמי של ימות המשיח.
