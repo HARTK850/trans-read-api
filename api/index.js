@@ -104,40 +104,37 @@ class YemotCommandBuilder {
     }
 
     build() {
-        let res = "";
+    let res = "";
 
-        const textPart = this.contentBlocks.join('.');
+    const textPart = this.contentBlocks.join('.');
 
-        if (this.action === "read") {
-            if (this.params.length > 0) {
-                // 🔥 הפורמט הנכון!!
-                res = `read=${textPart},${this.params.join(',')}`;
-            } else {
-                res = `read=${textPart}`;
-            }
-        }
-        else if (this.action === "id_list_message") {
-            res = `id_list_message=${textPart}`;
-        }
-        else if (this.action === "go_to_folder") {
-            res = `go_to_folder=${this.goToFolder || "/"}`;
-        }
-        else {
-            res = `${this.action}=${textPart}`;
+    if (this.action === "read") {
+        res = `read=${textPart}`;
+
+        if (this.params.length > 0) {
+            res += `=${this.params.join(',')}`;
         }
 
-        let i = 0;
-        for (const [key, value] of Object.entries(this.nextState)) {
-            res += `&api_add_${i}=${key}=${encodeURIComponent(value)}`;
-            i++;
-        }
+    } else if (this.action === "id_list_message") {
+        res = `id_list_message=${textPart}`;
 
-        if (this.goToFolder && this.action !== "go_to_folder") {
-            res += `&go_to_folder=${this.goToFolder}`;
-        }
-
-        return res;
+    } else if (this.action === "go_to_folder") {
+        res = `go_to_folder=${this.goToFolder || "/"}`;
     }
+
+    // api_add
+    let index = 0;
+    for (const [key, value] of Object.entries(this.nextState)) {
+        res += `&api_add_${index}=${key}=${encodeURIComponent(value)}`;
+        index++;
+    }
+
+    if (this.goToFolder && this.action !== "go_to_folder") {
+        res += `&go_to_folder=${this.goToFolder}`;
+    }
+
+    return res;
+}
 }
 
 // ============================================================================
