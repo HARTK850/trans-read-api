@@ -117,7 +117,7 @@ class YemotCommandBuilder {
     const textPart = this.contentBlocks.join('.');
 
     if (this.action === "read" && this.params.length > 0) {
-        res = `read=${textPart}=${this.params.join(',')}`;
+        res = `read=${textPart},${this.params.join(',')}`;
     } else if (this.action === "id_list_message") {
         res = `id_list_message=${textPart}`;
     } else if (this.action === "go_to_folder") {
