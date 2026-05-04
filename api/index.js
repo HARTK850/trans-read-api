@@ -26,23 +26,25 @@ const TEMP_FOLDER = "/Temp_Gemini_App";
 // ============================================================================
 class YemotCommandBuilder {
     constructor(action) {
-        this.action = action; 
-        this.contentBlocks =[]; 
-        this.params =[]; 
-        this.nextState = {}; 
-        this.goToFolder = null; 
+        this.action = action;
+        this.contentBlocks = [];
+        this.params = [];
+        this.nextState = {};
+        this.goToFolder = null;
     }
 
     cleanYemotText(text) {
         if (!text) return "";
-        // מחיקת כל תווים בעייתיים (נקודות, פסיקים) שעלולים לשבור את תחביר המחרוזות
-        return text.toString().replace(/[.,-]/g, " ").replace(/\s+/g, " ").trim();
+        return text.toString()
+            .replace(/[.,-]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
     }
 
     addText(text) {
-        const cleanStr = this.cleanYemotText(text);
-        if (cleanStr.length > 0) {
-            this.contentBlocks.push(`t-${cleanStr}`);
+        const clean = this.cleanYemotText(text);
+        if (clean) {
+            this.contentBlocks.push(`t-${clean}`);
         }
         return this;
     }
@@ -54,49 +56,39 @@ class YemotCommandBuilder {
         return this;
     }
 
-    /**
-     * פונקציה חכמה למניעת בקשות אישור וטיפול בשגיאות מינימום/מקסימום.
-     * מבוסס על מבנה מדויק של 9 פרמטרים.
-     * 1:שם, 2:שימוש בקיים(no), 3:סוג(Digits), 4:מקסימום, 5:מינימום, 6:זמן, 7:הקראה(No), 8:חסימת כוכבית, 9:חסימת אפס.
-     */
     setReadDigitsAdvanced(
-    varName,
-    maxDigits,
-    minDigits,
-    timeout,
-    disableConfirmation = true,
-    allowStar = true,
-    allowZero = true
-) {
-    this.params = [
-        varName,                         // 1
-        "no",                           // 2
-        maxDigits.toString(),           // 3
-        minDigits.toString(),           // 4
-        timeout.toString(),             // 5
-        "Digits",                       // 6
-        disableConfirmation ? "No" : "Ok", // 7
-        allowStar ? "yes" : "no",      // 8
-        allowZero ? "yes" : "no"       // 9
-    ];
+        varName,
+        maxDigits,
+        minDigits,
+        timeout,
+        disableConfirmation = true,
+        allowStar = true,
+        allowZero = true
+    ) {
+        this.params = [
+            varName,                      // 1
+            "no",                         // 2
+            maxDigits.toString(),         // 3
+            minDigits.toString(),         // 4
+            timeout.toString(),           // 5
+            "Digits",                     // 6
+            disableConfirmation ? "No" : "Ok", // 7
+            allowStar ? "yes" : "no",     // 8
+            allowZero ? "yes" : "no"      // 9
+        ];
+        return this;
+    }
 
-    return this;
-}
-
-    /**
-     * הגדרת קלט הקלטה (Record). מפעיל את התפריט הרשמי של ימות המשיח.
-     */
     setRecordInput(varName, folder, fileName) {
-        // פרמטר 6 הוא "no" כדי שלא יאשר אוטומטית ויפעיל את התפריט המלא
-        this.params =[
-            varName,   // 1. משתנה 
-            "no",      // 2. להשתמש בקיים
-            "record",  // 3. סוג קלט
-            folder,    // 4. תיקיית יעד בימות
-            fileName,  // 5. שם קובץ
-            "no",      // 6. הפעלת התפריט המלא של ימות (לשמיעה 1, אישור 2...)
-            "yes",     // 7. שמירה בניתוק
-            "no"       // 8. לא לשרשר
+        this.params = [
+            varName,
+            "no",
+            "record",
+            folder,
+            fileName,
+            "no",
+            "yes",
+            "no"
         ];
         return this;
     }
@@ -112,31 +104,39 @@ class YemotCommandBuilder {
     }
 
     build() {
-    let res = "";
+        let res = "";
 
-    const textPart = this.contentBlocks.join('.');
+        const textPart = this.contentBlocks.join('.');
 
-    if (this.action === "read" && this.params.length > 0) {
-        res = `read=${textPart},${this.params.join(',')}`;
-    } else if (this.action === "id_list_message") {
-        res = `id_list_message=${textPart}`;
-    } else if (this.action === "go_to_folder") {
-        res = `go_to_folder=${this.goToFolder || "/"}`;
-    } else {
-        res = `${this.action}=${textPart}`;
-    }
+        if (this.action === "read") {
+            if (this.params.length > 0) {
+                // 🔥 הפורמט הנכון!!
+                res = `read=${textPart},${this.params.join(',')}`;
+            } else {
+                res = `read=${textPart}`;
+            }
+        }
+        else if (this.action === "id_list_message") {
+            res = `id_list_message=${textPart}`;
+        }
+        else if (this.action === "go_to_folder") {
+            res = `go_to_folder=${this.goToFolder || "/"}`;
+        }
+        else {
+            res = `${this.action}=${textPart}`;
+        }
 
-    let index = 0;
-    for (const [key, value] of Object.entries(this.nextState)) {
-        res += `&api_add_${index}=${key}=${encodeURIComponent(value)}`;
-        index++;
-    }
+        let i = 0;
+        for (const [key, value] of Object.entries(this.nextState)) {
+            res += `&api_add_${i}=${key}=${encodeURIComponent(value)}`;
+            i++;
+        }
 
-    if (this.goToFolder && this.action !== "go_to_folder") {
-        res += `&go_to_folder=${this.goToFolder}`;
-    }
+        if (this.goToFolder && this.action !== "go_to_folder") {
+            res += `&go_to_folder=${this.goToFolder}`;
+        }
 
-    return res;
+        return res;
     }
 }
 
