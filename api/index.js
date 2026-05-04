@@ -112,25 +112,27 @@ class YemotCommandBuilder {
     }
 
     build() {
-    let textPart = this.contentBlocks.join('.');
+    let res = "";
 
-    let res = `read=${textPart}`;
+    const textPart = this.contentBlocks.join('.');
 
-    // פרמטרים אמיתיים של read
-    if (this.params.length > 0) {
-        this.params.forEach((p, i) => {
-            res += `&read_${i + 1}=${encodeURIComponent(p)}`;
-        });
+    if (this.action === "read" && this.params.length > 0) {
+        res = `read=${textPart}=${this.params.join(',')}`;
+    } else if (this.action === "id_list_message") {
+        res = `id_list_message=${textPart}`;
+    } else if (this.action === "go_to_folder") {
+        res = `go_to_folder=${this.goToFolder || "/"}`;
+    } else {
+        res = `${this.action}=${textPart}`;
     }
 
-    // api_add
     let index = 0;
     for (const [key, value] of Object.entries(this.nextState)) {
         res += `&api_add_${index}=${key}=${encodeURIComponent(value)}`;
         index++;
     }
 
-    if (this.goToFolder) {
+    if (this.goToFolder && this.action !== "go_to_folder") {
         res += `&go_to_folder=${this.goToFolder}`;
     }
 
