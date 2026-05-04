@@ -330,7 +330,7 @@ module.exports = async (req, res) => {
                     responseBuilder = new YemotCommandBuilder("id_list_message").addText("תודה ולהתראות").addGoToFolder("/");
                 } else {
                     responseBuilder = new YemotCommandBuilder("read")
-                        .addText("בחירה לא חוקית לאישור עותק הקישו 1 לביטול הקישו 2")
+                        .addText("לאישור יצירת עותק בשלוחה שאינה ברירת מחדל הקישו 1 לביטול הקישו 2")
                         .setReadDigitsAdvanced("WantCopySave", 1, 1, 10, true, false, false);
                 }
                 break;
