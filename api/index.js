@@ -112,34 +112,29 @@ class YemotCommandBuilder {
     }
 
     build() {
-        let res = "";
-        const textPart = this.contentBlocks.join('.');
+    let textPart = this.contentBlocks.join('.');
 
-        if (this.action === "read" && this.params.length > 0) {
-            res = `read=${textPart}=${this.params.join(',')}`;
-        } else if (this.action === "id_list_message") {
-            res = `id_list_message=${textPart}`;
-        } else if (this.action === "go_to_folder") {
-            res = `go_to_folder=${this.goToFolder || "/"}`;
-        } else {
-            res = `${this.action}=${textPart}`;
-        }
+    let res = `read=${textPart}`;
 
-        let index = 0;
-        let apiAddStr = "";
-        for (const [key, value] of Object.entries(this.nextState)) {
-            apiAddStr += `&api_add_${index}=${key}=${encodeURIComponent(value)}`;
-            index++;
-        }
-
-        res += apiAddStr;
-
-        if (this.goToFolder && this.action !== "go_to_folder" && this.action !== "read") {
-            res += `&go_to_folder=${this.goToFolder}`;
-        }
-
-        return res;
+    // פרמטרים אמיתיים של read
+    if (this.params.length > 0) {
+        this.params.forEach((p, i) => {
+            res += `&read_${i + 1}=${encodeURIComponent(p)}`;
+        });
     }
+
+    // api_add
+    let index = 0;
+    for (const [key, value] of Object.entries(this.nextState)) {
+        res += `&api_add_${index}=${key}=${encodeURIComponent(value)}`;
+        index++;
+    }
+
+    if (this.goToFolder) {
+        res += `&go_to_folder=${this.goToFolder}`;
+    }
+
+    return res;
 }
 
 // ============================================================================
@@ -205,8 +200,8 @@ module.exports = async (req, res) => {
                 // שלב 0: פתיח המערכת ובקשת הקלטה.
                 // ====================================================================
                 responseBuilder = new YemotCommandBuilder("read")
-                    .addText("ברוכים הבאים למחולל ההקראות החכם של ג'מיני")
-                    .addText("הקליטו את הטקסט שברצונכם להקריא ולאחר מכן הקישו סולמית")
+                    .addText("ברוכים הבאים למחולל ההקראות החכם")
+                    .addText("אנא הקליטו את הטקסט שברצונכם להקריא ולאחר מכן הקישו סולמית")
                     .setRecordInput("UserAudioRecord", TEMP_FOLDER, `${ApiCallId}_main`);
                 break;
 
@@ -234,7 +229,7 @@ module.exports = async (req, res) => {
 
                 responseBuilder = new YemotCommandBuilder("read")
                     .addText("הטקסט נותח ונקלט בהצלחה")
-                    .addText("לבחירת קול קריין גברי הקישו 1 לבחירת קול קריינית נשית הקישו 2")
+                    .addText("לבחירת קול קריין גברי הקישו 1 לבחירת קול קריינית נשי הקישו 2")
                     // מקסימום 1, מינימום 1, ללא אישור (AskNo מופעל אוטומטית), חוסם אפס (allowZero=false)
                     .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, false, false); 
                 break;
