@@ -58,33 +58,27 @@ class YemotCommandBuilder {
      * מבוסס על שרשור מדויק של פרמטרים. 'No' בפרמטר השביעי (השישי במערך כי מתחילים מ-0) 
      * הוא זה שמבטל את הקראת ה'הקשת X', ואילו 'no' בפרמטר ה-16 (ה-15 במערך) מבטל אישור סופי.
      */
-    setReadDigitsAdvanced(varName, maxDigits, minDigits, timeout, disableConfirmation = true, allowZero = false, autoReplaceAsteriskWithSlash = false) {
-        const playType = disableConfirmation ? "No" : "Digits"; // ביטול השמעת ההקשה
-        const blockAsterisk = autoReplaceAsteriskWithSlash ? "no" : "yes";
-        const blockZero = allowZero ? "no" : "yes"; // block_zero="no" אומר שאין חסימה
-        const replaceChar = autoReplaceAsteriskWithSlash ? "*/" : "";
-        const askConfirm = disableConfirmation ? "no" : ""; // ביטול "לאישור הקישו 1"
-
-        this.params =[
-            varName,               // 1
-            "no",                  // 2
-            "Digits",              // 3
-            maxDigits.toString(),  // 4
-            minDigits.toString(),  // 5
-            timeout.toString(),    // 6
-            playType,              // 7
-            blockAsterisk,         // 8
-            blockZero,             // 9
-            replaceChar,           // 10
-            "",                    // 11
-            "",                    // 12
-            "",                    // 13
-            "",                    // 14
-            "",                    // 15
-            askConfirm             // 16
-        ];
-        return this;
-    }
+    setReadDigitsAdvanced(varName, maxDigits, minDigits, timeout) {
+    this.params = [
+        varName,
+        "no",
+        "Digits",
+        maxDigits.toString(),
+        minDigits.toString(),
+        timeout.toString(),
+        "No",
+        "yes",
+        "yes",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "no"
+    ];
+    return this;
+}
 
     /**
      * הגדרת קלט הקלטה (Record). מחזיר את התפריט הרשמי של ימות ("לשמיעה הקישו 1..").
@@ -169,37 +163,47 @@ function cleanupEmptyQueryVariables(query) {
 // ============================================================================
 async function processListenerAudioInBackground(yemot, ApiCallId, listenerFolder, voiceId) {
     try {
-        TelemetryLogger.info("BackgroundWorker", "Start", `תהליך רקע למאזין. מזהה: ${ApiCallId}. השהיה: 3 דקות.`);
-        
-        // השהיה אנושית מדומה של 3 דקות (180,000 מילישניות).
-        await new Promise(resolve => setTimeout(resolve, 180000));
-        
+        TelemetryLogger.info("BackgroundWorker", "Start", `מתחיל עיבוד מיידי: ${ApiCallId}`);
+
         const recordPath = `${TEMP_FOLDER}/${ApiCallId}_lis.wav`;
+
         const audioBuffer = await yemot.downloadFile(`ivr2:${recordPath}`);
-        
-        // הפעלת תמלול + סינון (ללא רגש)
+
         const moderationResult = await processor.transcribeSimple(audioBuffer);
-        
-        if (!moderationResult.is_kosher) {
-            TelemetryLogger.warn("BackgroundWorker", "KosherFilter", `תוכן נפסל! מזהה: ${ApiCallId}. הטקסט: ${moderationResult.text}`);
-            await yemot.deleteFile(`ivr2:${recordPath}`);
-            return; 
+
+        if (!moderationResult || !moderationResult.is_kosher || !moderationResult.text) {
+            TelemetryLogger.warn("BackgroundWorker", "Rejected", `תוכן נפסל ${ApiCallId}`);
+            return false;
         }
-        
-        // יצירת אודיו בקצב מונוטוני אחיד למאזין
-        const ttsBuffer = await processor.generateTTS(moderationResult.text, voiceId, null);
-        
-        const cleanListenerFolder = cleanAndSanitizeFolder(listenerFolder);
-        const categoryFolder = cleanListenerFolder ? `${cleanListenerFolder}/${moderationResult.category}` : moderationResult.category;
-        
-        const nextFileName = await yemot.getNextSequenceFileName(categoryFolder);
-        const finalPath = `ivr2:/${categoryFolder}/${nextFileName}.wav`;
-        
+
+        const ttsBuffer = await processor.generateTTS(
+            moderationResult.text,
+            voiceId,
+            null
+        );
+
+        const cleanFolder = cleanAndSanitizeFolder(listenerFolder);
+        const category = moderationResult.category || "כללי";
+
+        const finalFolder = cleanFolder
+            ? `/${cleanFolder}/${category}`
+            : `/${category}`;
+
+        const nextNum = await yemot.getNextSequenceFileName(finalFolder);
+
+        const finalPath = `ivr2:${finalFolder}/${nextNum}.wav`;
+
         await yemot.uploadFile(finalPath, ttsBuffer);
+
         await yemot.deleteFile(`ivr2:${recordPath}`);
-        
+
+        TelemetryLogger.info("BackgroundWorker", "Done", finalPath);
+
+        return true;
+
     } catch (error) {
-        TelemetryLogger.error("BackgroundWorker", "Error", "שגיאה בתהליך רקע למאזין.", error);
+        TelemetryLogger.error("BackgroundWorker", "Crash", "קריסה", error);
+        return false;
     }
 }
 
@@ -512,29 +516,55 @@ async function handleListenerFlow(query, ctx, yemot) {
             break;
 
         case 2030:
-            const waitChoice = InputValidator.getFirstDigit(query.ListenerWaitOrExit);
-            const chosenVoiceId = query.voiceId;
-            
-            // מריץ את העיבוד ברקע כדי לדמות תהליך ידני של אולפן. כולל סינון חרדי.
-            processListenerAudioInBackground(yemot, ctx.ApiCallId, ctx.listenerFolder, chosenVoiceId);
+    const waitChoice = InputValidator.getFirstDigit(query.ListenerWaitOrExit);
+    const chosenVoiceId = query.voiceId;
 
-            if (waitChoice === "1") {
-                responseBuilder = new YemotCommandBuilder("id_list_message")
-                    .addText("עקב עומס במערכות העיבוד יתבצע ברקע וניתן לחזור אליו מאוחר יותר")
-                    .addText("הינך מוחזר לתפריט הראשי הקובץ יהיה מוכן בעוד מספר דקות")
-                    .addGoToFolder("/");
-            } else if (waitChoice === "2") {
-                responseBuilder = new YemotCommandBuilder("id_list_message")
-                    .addText("הינך מוחזר לתפריט הראשי הקובץ יהיה מוכן בעוד מספר דקות")
-                    .addGoToFolder("/");
-            } else {
-                responseBuilder = new YemotCommandBuilder("read")
-                    .addText("בחירה לא חוקית להמתנה על הקו הקישו 1 להפקת רקע הקישו 2")
-                    .setReadDigitsAdvanced("ListenerWaitOrExit", 1, 1, 10, true, false, false)
-                    .addState("voiceId", chosenVoiceId)
-                    .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
-            }
-            break;
+    if (waitChoice === "1") {
+
+        responseBuilder = new YemotCommandBuilder("id_list_message")
+            .addText("המערכת מעבדת כעת את ההקלטה נא להמתין");
+
+        const success = await processListenerAudioInBackground(
+            yemot,
+            ctx.ApiCallId,
+            ctx.listenerFolder,
+            chosenVoiceId
+        );
+
+        if (success) {
+            responseBuilder = new YemotCommandBuilder("id_list_message")
+                .addText("הקובץ הוכן בהצלחה ונשמר בשלוחה")
+                .addGoToFolder("/");
+        } else {
+            responseBuilder = new YemotCommandBuilder("id_list_message")
+                .addText("העיבוד נכשל נסו שוב מאוחר יותר")
+                .addGoToFolder("/");
+        }
+
+    } else if (waitChoice === "2") {
+
+        processListenerAudioInBackground(
+            yemot,
+            ctx.ApiCallId,
+            ctx.listenerFolder,
+            chosenVoiceId
+        );
+
+        responseBuilder = new YemotCommandBuilder("id_list_message")
+            .addText("הקובץ יוכן ברקע ויופיע בעוד זמן קצר")
+            .addGoToFolder("/");
+
+    } else {
+
+        responseBuilder = new YemotCommandBuilder("read")
+            .addText("בחירה לא חוקית להמתנה הקישו 1 לעיבוד ברקע הקישו 2")
+            .setReadDigitsAdvanced("ListenerWaitOrExit", 1, 1, 10)
+            .addState("voiceId", chosenVoiceId)
+            .addState("yemot_token", ctx.YemotToken)
+            .addState("admin_phones", query.admin_phones)
+            .addState("listener_folder", ctx.listenerFolder);
+    }
+    break;
 
         default:
             responseBuilder = new YemotCommandBuilder("go_to_folder").addText("/");
