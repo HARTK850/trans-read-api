@@ -1,21 +1,15 @@
 /**
  * @file api/index.js
- * @version 21.0.0 (Glatt Kosher Enterprise Edition)
- * @description מודול IVR חכם המחבר את מערכת הטלפוניה של "ימות המשיח" למחולל ההקראות.
- * 
- * פיצ'רים מרכזיים בגרסה זו:
- * 1. פיצול אבטחה סמוי (Stealth Auth) בין מנהלים למאזינים.
- * 2. מנוע השמעת קבצים למנהלים לאישור/מחיקת קריינויות מהאולפן.
- * 3. הסרת סממני רובוטיקה/בינה מלאכותית - שימוש במונחים מקצועיים ("מחולל ההקראות").
- * 4. פילטר צניעות ותוכן קפדני אקטיבי.
- * 5. עיבוד רקע אסינכרוני (Background Worker) עם השהיה לדימוי פעולה אנושית.
- * 6. סידור מדויק של 16 הפרמטרים לפקודת Read לביטול מוחלט של 'לאישור הקישו 1'.
+ * @version 22.0.0 (Enterprise Voice Generator Edition)
+ * @description מודול IVR המחבר את מערכת הטלפוניה של ימות המשיח.
+ * פיצול מסלולי מאזינים ומנהלים, פילטר תוכן קפדני (Glatt Kosher), מניעת השמעות מיותרות
+ * ותפריטים מהירים ללא "לאישור הקישו 1".
  */
 
-const { GeminiManager, YemotManager, GEMINI_VOICES, TelemetryLogger, SecurityManager } = require('./core');
+const { GeminiManager, YemotManager, VOICES_REGISTRY, TelemetryLogger, SecurityManager, InputValidator } = require('./core');
 
 // ============================================================================
-// הגדרות סביבה גלובליות וקבועים (Enterprise Configuration)
+// הגדרות סביבה גלובליות וקבועים
 // ============================================================================
 const GEMINI_API_KEYS = process.env.GEMINI_API_KEYS 
     ? process.env.GEMINI_API_KEYS.split(',') 
@@ -27,7 +21,7 @@ const TEMP_FOLDER = "/Temp_Studio_App";
 const DEFAULT_LISTENER_FOLDER = "/Listener_Audio"; 
 
 // ============================================================================
-// מנוע אובייקט-אוריינטד להרכבת תגובות (YemotCommandBuilder)
+// מנוע להרכבת תגובות לתקן המחמיר של ימות המשיח
 // ============================================================================
 class YemotCommandBuilder {
     constructor(action) {
@@ -40,7 +34,7 @@ class YemotCommandBuilder {
 
     cleanYemotText(text) {
         if (!text) return "";
-        // מסיר נקודות, פסיקים ומקפים כדי למנוע קריסת מערכת ימות המשיח
+        // הסרת כל סימני הפיסוק שיכולים לשבור את פקודות ימות המשיח
         return text.toString().replace(/[.,-]/g, " ").replace(/\s+/g, " ").trim();
     }
 
@@ -60,50 +54,51 @@ class YemotCommandBuilder {
     }
 
     /**
-     * הגדרת קלט מספרי מתקדם - פותר את בעיות ה"מינימום ספרות" ומבטל "לאישור הקישו 1".
-     * מחייב להעביר בדיוק 16 פרמטרים מופרדים בפסיק בהתאם לתקן ימות המשיח.
+     * פונקציה חכמה למניעת בקשות אישור וטיפול בשגיאות.
+     * מבוסס על שרשור מדויק של פרמטרים. 'No' בפרמטר השביעי (השישי במערך כי מתחילים מ-0) 
+     * הוא זה שמבטל את הקראת ה'הקשת X', ואילו 'no' בפרמטר ה-16 (ה-15 במערך) מבטל אישור סופי.
      */
     setReadDigitsAdvanced(varName, maxDigits, minDigits, timeout, disableConfirmation = true, allowZero = false, autoReplaceAsteriskWithSlash = false) {
-        const playType = disableConfirmation ? "No" : "Digits"; // No מבטל הקראת "הקשת X"
+        const playType = disableConfirmation ? "No" : "Digits"; // ביטול השמעת ההקשה
         const blockAsterisk = autoReplaceAsteriskWithSlash ? "no" : "yes";
-        const blockZero = allowZero ? "no" : "yes"; 
+        const blockZero = allowZero ? "no" : "yes"; // block_zero="no" אומר שאין חסימה
         const replaceChar = autoReplaceAsteriskWithSlash ? "*/" : "";
-        const askConfirm = disableConfirmation ? "no" : ""; // no כאן חוסם את 'לאישור הקישו 1' לחלוטין
+        const askConfirm = disableConfirmation ? "no" : ""; // ביטול "לאישור הקישו 1"
 
         this.params =[
-            varName,               // 1. שם משתנה
-            "no",                  // 2. האם להשתמש בקיים
-            "Digits",              // 3. סוג קלט
-            maxDigits.toString(),  // 4. מקסימום ספרות
-            minDigits.toString(),  // 5. מינימום ספרות
-            timeout.toString(),    // 6. זמן המתנה בשניות
-            playType,              // 7. השמעת ההקשה (No = ביטול מוחלט)
-            blockAsterisk,         // 8. חסימת כוכבית
-            blockZero,             // 9. חסימת אפס
-            replaceChar,           // 10. החלפת תווים
-            "",                    // 11. מקשים מורשים
-            "",                    // 12. כמות פעמים
-            "",                    // 13. המשך אם ריק
-            "",                    // 14. פולבק ריק
-            "",                    // 15. מודל מקלדת
-            askConfirm             // 16. אישור הקשה סופי ("no")
+            varName,               // 1
+            "no",                  // 2
+            "Digits",              // 3
+            maxDigits.toString(),  // 4
+            minDigits.toString(),  // 5
+            timeout.toString(),    // 6
+            playType,              // 7
+            blockAsterisk,         // 8
+            blockZero,             // 9
+            replaceChar,           // 10
+            "",                    // 11
+            "",                    // 12
+            "",                    // 13
+            "",                    // 14
+            "",                    // 15
+            askConfirm             // 16
         ];
         return this;
     }
 
     /**
-     * הגדרת קלט הקלטה (Record). שומר על התפריט המקורי של ימות (1 לשמיעה, 2 לאישור).
+     * הגדרת קלט הקלטה (Record). מחזיר את התפריט הרשמי של ימות ("לשמיעה הקישו 1..").
      */
     setRecordInput(varName, folder, fileName) {
         this.params =[
-            varName,   // 1. משתנה 
-            "no",      // 2. להשתמש בקיים
-            "record",  // 3. סוג קלט
-            folder,    // 4. תיקיית יעד בימות
-            fileName,  // 5. שם קובץ
-            "no",      // 6. הפעלת התפריט המלא של ימות
-            "yes",     // 7. שמירה בניתוק
-            "no"       // 8. לא לשרשר לקובץ קודם
+            varName,   // 1
+            "no",      // 2
+            "record",  // 3
+            folder,    // 4
+            fileName,  // 5
+            "no",      // 6. הפעלת תפריט ימות
+            "yes",     // 7
+            "no"       // 8
         ];
         return this;
     }
@@ -134,7 +129,6 @@ class YemotCommandBuilder {
             res = `${this.action}=${textPart}`;
         }
 
-        // צירוף המשתנים ל-API Add
         let index = 0;
         let apiAddStr = "";
         for (const [key, value] of Object.entries(this.nextState)) {
@@ -153,12 +147,8 @@ class YemotCommandBuilder {
 }
 
 // ============================================================================
-// פונקציות עזר גלובליות
+// פונקציות עזר 
 // ============================================================================
-
-/**
- * מנקה ומסדר נתיב תיקייה. מונע שגיאות של כפילות סלשים או ניתוב לשורש בטעות.
- */
 function cleanAndSanitizeFolder(rawPath) {
     if (!rawPath || rawPath === "0") return ""; 
     let sanitized = rawPath.replace(/\*/g, "/").replace(/\/+/g, "/").trim();
@@ -167,9 +157,6 @@ function cleanAndSanitizeFolder(rawPath) {
     return sanitized;
 }
 
-/**
- * מנקה משתנים ריקים כדי למנוע קריסות בלוגיקת השלבים (תיקון הבאג שציינת).
- */
 function cleanupEmptyQueryVariables(query) {
     const keys =["UserAudioRecord", "VoiceGender", "VoiceIndex", "ListenerWaitOrExit", "AdminMainMenu", "AdminManageCategorySelect", "AdminManageFileAction", "AdminCreateRecord"];
     for (const key of keys) {
@@ -178,83 +165,65 @@ function cleanupEmptyQueryVariables(query) {
 }
 
 // ============================================================================
-// תהליכי רקע אסינכרוניים (Background Workers)
+// תהליכי רקע אסינכרוניים (Background Workers) למאזינים
 // ============================================================================
-
-/**
- * מפיק את ההקראה ברקע עם השהיה אנושית מדומה של 3 דקות.
- */
 async function processListenerAudioInBackground(yemot, ApiCallId, listenerFolder, voiceId) {
     try {
-        TelemetryLogger.info("BackgroundWorker", "Start", `מתחיל תהליך רקע עבור: ${ApiCallId}. ממתין 3 דקות להדמיית עריכה.`);
+        TelemetryLogger.info("BackgroundWorker", "Start", `תהליך רקע למאזין. מזהה: ${ApiCallId}. השהיה: 3 דקות.`);
         
-        // השהיה אנושית של 3 דקות (180,000 מילישניות).
-        // הערה ללקוח: אם ב-Vercel החינמי הפונקציה נקטעת, יש לשדרג לפרו או לעבוד ללא ההשהיה. הקוד עמיד.
+        // השהיה אנושית מדומה של 3 דקות (180,000 מילישניות).
         await new Promise(resolve => setTimeout(resolve, 180000));
         
-        TelemetryLogger.info("BackgroundWorker", "Processing", `מתחיל ניתוח טקסט עבור: ${ApiCallId}`);
         const recordPath = `${TEMP_FOLDER}/${ApiCallId}_lis.wav`;
         const audioBuffer = await yemot.downloadFile(`ivr2:${recordPath}`);
         
-        // 1. פענוח + סינון גלאט כושר
-        const moderationResult = await processor.processAudioAndModerate(audioBuffer);
+        // הפעלת תמלול + סינון (ללא רגש)
+        const moderationResult = await processor.transcribeSimple(audioBuffer);
         
-        // 2. הפעלת מנגנון הסינון הסמוי
         if (!moderationResult.is_kosher) {
-            TelemetryLogger.warn("BackgroundWorker", "KosherFilter", `תוכן נפסל. מזהה: ${ApiCallId}. הטקסט: ${moderationResult.text}`);
+            TelemetryLogger.warn("BackgroundWorker", "KosherFilter", `תוכן נפסל! מזהה: ${ApiCallId}. הטקסט: ${moderationResult.text}`);
             await yemot.deleteFile(`ivr2:${recordPath}`);
-            return; // סיום שקט. הלקוח לא מקבל כלום והקובץ מושמד.
+            return; 
         }
         
-        TelemetryLogger.info("BackgroundWorker", "KosherFilter", `תוכן אושר. קטגוריה: ${moderationResult.category}`);
-
-        // 3. הפקת האודיו בעזרת המודל
-        const ttsBuffer = await processor.generateVoiceAudio(moderationResult.text, voiceId, moderationResult.emotion);
+        // יצירת אודיו בקצב מונוטוני אחיד למאזין
+        const ttsBuffer = await processor.generateTTS(moderationResult.text, voiceId, null);
         
-        // 4. תיוק התיקייה הסופית לפי קטגוריה
         const cleanListenerFolder = cleanAndSanitizeFolder(listenerFolder);
         const categoryFolder = cleanListenerFolder ? `${cleanListenerFolder}/${moderationResult.category}` : moderationResult.category;
         
         const nextFileName = await yemot.getNextSequenceFileName(categoryFolder);
         const finalPath = `ivr2:/${categoryFolder}/${nextFileName}.wav`;
         
-        // 5. שמירה ומחיקת זמניים
         await yemot.uploadFile(finalPath, ttsBuffer);
-        TelemetryLogger.info("BackgroundWorker", "Done", `הקובץ הופק ונשמר בנתיב: ${finalPath}`);
-        
         await yemot.deleteFile(`ivr2:${recordPath}`);
         
     } catch (error) {
-        TelemetryLogger.error("BackgroundWorker", "Error", "כשל בתהליך הרקע.", error);
+        TelemetryLogger.error("BackgroundWorker", "Error", "שגיאה בתהליך רקע למאזין.", error);
     }
 }
 
 // ============================================================================
-// מערכות State פנימיות וניהול ניתוב
+// נתבים לוגיים (Routers)
 // ============================================================================
-
 function extractContext(query) {
     return {
         ApiPhone: query.ApiPhone || "UnknownPhone",
         ApiCallId: query.ApiCallId || "UnknownCallId",
-        isAdmin: SecurityManager.isAdministrator(query.ApiPhone),
+        isAdmin: SecurityManager.isAdministrator(query.ApiPhone, query.admin_phones),
         YemotToken: query.yemot_token || process.env.YEMOT_TOKEN,
         listenerFolder: query.listener_folder || DEFAULT_LISTENER_FOLDER 
     };
 }
 
-// ============================================================================
-// מנהל מסלול מנהלים (Admin Flow Controller)
-// ============================================================================
+// ==================== מנהל מסלול מנהלים (Admin Flow) ====================
 async function handleAdminFlow(query, ctx, yemot) {
     let state = 0;
     
-    // ניתוח שלבי מנהל פנימיים
     if (query.AdminManageFileAction !== undefined) state = 125;
     else if (query.AdminManageCategorySelect !== undefined) state = 120;
     else if (query.AdminMainMenu !== undefined) state = 110;
     
-    // מצבי הפקת קריינות על ידי מנהל (משתמש במנגנון המיידי)
     if (query.VoiceIndex !== undefined) state = 1003;
     else if (query.VoiceGender !== undefined) state = 1002;
     else if (query.AdminCreateRecord !== undefined) state = 1001;
@@ -265,15 +234,17 @@ async function handleAdminFlow(query, ctx, yemot) {
         case 0:
             responseBuilder = new YemotCommandBuilder("read")
                 .addText("ברוך הבא למערכת הניהול של מחולל ההקראות")
-                .addText("לניהול ושמיעת הקריינויות שהוקלטו על ידי המאזינים הקישו 1")
-                .addText("להפקת קריינות חדשה בעצמך הקישו 2")
+                .addText("לניהול ושמיעת הקריינויות שהוקלטו על ידי המשתמשים הקישו 1")
+                .addText("להפקת קריינות חדשה הקישו 2")
                 .setReadDigitsAdvanced("AdminMainMenu", 1, 1, 10, true, false, false)
                 .addState("yemot_token", ctx.YemotToken)
+                .addState("admin_phones", query.admin_phones)
                 .addState("listener_folder", ctx.listenerFolder);
             break;
 
         case 110:
-            if (query.AdminMainMenu === "1") {
+            const adminMainMenuChoice = InputValidator.getFirstDigit(query.AdminMainMenu);
+            if (adminMainMenuChoice === "1") {
                 const cleanFolder = cleanAndSanitizeFolder(ctx.listenerFolder);
                 const dirData = await yemot.getIvr2Dir(cleanFolder);
                 
@@ -284,39 +255,39 @@ async function handleAdminFlow(query, ctx, yemot) {
                     break;
                 }
 
-                responseBuilder = new YemotCommandBuilder("read")
-                    .addText("אנא בחרו את הקטגוריה שברצונכם לנהל");
-                
+                responseBuilder = new YemotCommandBuilder("read").addText("אנא בחרו את הקטגוריה שברצונכם לנהל");
                 let catMapping = "";
                 for (let i = 0; i < dirData.dirs.length; i++) {
                     const num = i + 1;
                     const spokenNum = num < 10 ? `אפס ${num}` : `${num}`;
                     const dirName = dirData.dirs[i].name;
-                    const cleanDirName = dirName.replace(/_/g, " ");
-                    responseBuilder.addText(`לקטגוריית ${cleanDirName} הקישו ${spokenNum}`);
+                    responseBuilder.addText(`לקטגוריית ${dirName.replace(/_/g, " ")} הקישו ${spokenNum}`);
                     catMapping += `${num}:${dirName}|`;
                 }
                 
                 responseBuilder.addText("ובסיום הקישו סולמית");
                 responseBuilder.setReadDigitsAdvanced("AdminManageCategorySelect", 2, 2, 15, true, true, false)
                     .addState("AdminCatMapping", catMapping)
-                    .addState("yemot_token", ctx.YemotToken)
+                    .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones)
                     .addState("listener_folder", ctx.listenerFolder);
 
-            } else if (query.AdminMainMenu === "2") {
+            } else if (adminMainMenuChoice === "2") {
                 responseBuilder = new YemotCommandBuilder("read")
                     .addText("הקליטו את הטקסט שברצונכם להפיק במערכת ולאחר מכן הקישו סולמית")
                     .setRecordInput("AdminCreateRecord", TEMP_FOLDER, `${ctx.ApiCallId}_admin`)
-                    .addState("yemot_token", ctx.YemotToken)
+                    .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones)
                     .addState("listener_folder", ctx.listenerFolder);
             } else {
-                responseBuilder = new YemotCommandBuilder("go_to_folder").addText("/");
+                responseBuilder = new YemotCommandBuilder("read")
+                    .addText("בחירה לא חוקית. לניהול הקישו 1 להפקה הקישו 2")
+                    .setReadDigitsAdvanced("AdminMainMenu", 1, 1, 10, true, false, false)
+                    .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones)
+                    .addState("listener_folder", ctx.listenerFolder);
             }
             break;
 
         case 120:
         case 125:
-            // מנוע נגן קבצים למנהלים (Playback Engine)
             let categoryName = query.AdminCurrentCategory;
             if (!categoryName) {
                 const catSelection = parseInt(query.AdminManageCategorySelect, 10);
@@ -338,12 +309,11 @@ async function handleAdminFlow(query, ctx, yemot) {
             let currentFileIndex = parseInt(query.AdminFileIndex || "0", 10);
             
             if (state === 125) {
-                const actionChoice = query.AdminManageFileAction;
+                const actionChoice = InputValidator.getFirstDigit(query.AdminManageFileAction);
                 const fileNameToDelete = query.AdminCurrentFileName;
                 
                 if (actionChoice === "2") {
                     await yemot.deleteFile(`ivr2:/${activePath}/${fileNameToDelete}`);
-                    TelemetryLogger.info("Manager", "DeleteFile", `נמחק ${fileNameToDelete}`);
                 } else if (actionChoice === "1") {
                     currentFileIndex++;
                 } else if (actionChoice === "3") {
@@ -357,8 +327,7 @@ async function handleAdminFlow(query, ctx, yemot) {
 
             if (currentFileIndex >= validFiles.length) {
                 responseBuilder = new YemotCommandBuilder("id_list_message")
-                    .addText("אין עוד קבצים בקטגוריה זו. מוחזר לתפריט הראשי")
-                    .addGoToFolder("/");
+                    .addText("אין עוד קבצים בקטגוריה זו מוחזר לתפריט הראשי").addGoToFolder("/");
                 break;
             }
 
@@ -371,44 +340,44 @@ async function handleAdminFlow(query, ctx, yemot) {
                 .addState("AdminCurrentCategory", categoryName)
                 .addState("AdminFileIndex", currentFileIndex)
                 .addState("AdminCurrentFileName", fileToPlay)
-                .addState("yemot_token", ctx.YemotToken)
+                .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones)
                 .addState("listener_folder", ctx.listenerFolder);
             break;
 
         case 1001:
-            // STT מתקדם למנהלים בלבד
+            // STT חכם עם רגש למנהלים
             const adminRecordPath = `${TEMP_FOLDER}/${ctx.ApiCallId}_admin.wav`;
             const adminAudioBuffer = await yemot.downloadFile(`ivr2:${adminRecordPath}`);
-            const adminTranscribedData = await processor.processAudioAndModerate(adminAudioBuffer);
+            const adminTranscribedData = await processor.transcribeWithEmotion(adminAudioBuffer);
             
             if (!adminTranscribedData || !adminTranscribedData.text || adminTranscribedData.text.length < 2) {
                 responseBuilder = new YemotCommandBuilder("read")
                     .addText("לא הצלחנו להבין את ההקלטה אנא נסו שוב")
                     .setRecordInput("AdminCreateRecord", TEMP_FOLDER, `${ctx.ApiCallId}_admin`)
-                    .addState("yemot_token", ctx.YemotToken).addState("listener_folder", ctx.listenerFolder);
+                    .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
                 break;
             }
 
-            // שמירת הטקסט העשיר בקובץ עבודה
             await yemot.uploadTextFile(`ivr2:${TEMP_FOLDER}/${ctx.ApiCallId}_text.txt`, JSON.stringify(adminTranscribedData));
 
             responseBuilder = new YemotCommandBuilder("read")
                 .addText("הטקסט נותח ונקלט במערכת")
                 .addText("לבחירת קול של גבר הקישו 1 לבחירת קול של אישה הקישו 2")
                 .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, false, false) 
-                .addState("yemot_token", ctx.YemotToken).addState("listener_folder", ctx.listenerFolder);
+                .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
             break;
 
         case 1002:
-            if (query.VoiceGender !== "1" && query.VoiceGender !== "2") {
+            const adminGenderChoice = InputValidator.getFirstDigit(query.VoiceGender);
+            if (adminGenderChoice !== "1" && adminGenderChoice !== "2") {
                 responseBuilder = new YemotCommandBuilder("read")
                     .addText("בחירה לא חוקית לבחירת קול גברי הקישו 1 לקול נשי הקישו 2")
                     .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, false, false)
-                    .addState("yemot_token", ctx.YemotToken).addState("listener_folder", ctx.listenerFolder); 
+                    .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder); 
                 break;
             }
 
-            const isAdminMale = query.VoiceGender === "1";
+            const isAdminMale = adminGenderChoice === "1";
             const adminVoices = isAdminMale ? VOICES_REGISTRY.MALE : VOICES_REGISTRY.FEMALE;
             
             responseBuilder = new YemotCommandBuilder("read").addText("אנא בחרו את הקול הרצוי מתוך הרשימה הבאה");
@@ -421,7 +390,7 @@ async function handleAdminFlow(query, ctx, yemot) {
 
             responseBuilder.setReadDigitsAdvanced("VoiceIndex", 2, 2, 15, true, true, false)
                 .addState("gender", isAdminMale ? "MALE" : "FEMALE")
-                .addState("yemot_token", ctx.YemotToken).addState("listener_folder", ctx.listenerFolder);
+                .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
             break;
 
         case 1003:
@@ -432,7 +401,7 @@ async function handleAdminFlow(query, ctx, yemot) {
                 responseBuilder = new YemotCommandBuilder("read")
                     .addText("בחירה לא חוקית אנא הקישו שוב את מספר הקול הרצוי מתוך הרשימה ובסיום סולמית")
                     .setReadDigitsAdvanced("VoiceIndex", 2, 2, 15, true, true, false)
-                    .addState("gender", query.gender).addState("yemot_token", ctx.YemotToken).addState("listener_folder", ctx.listenerFolder);
+                    .addState("gender", query.gender).addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
                 break;
             }
 
@@ -440,10 +409,8 @@ async function handleAdminFlow(query, ctx, yemot) {
             const adminRawData = await yemot.getTextFile(`ivr2:${TEMP_FOLDER}/${ctx.ApiCallId}_text.txt`);
             const adminParsed = JSON.parse(adminRawData);
             
-            // יצירת ההקראה המיידית למנהל
-            const aTtsBuffer = await processor.generateVoiceAudio(adminParsed.text, aSelectedVoiceId, adminParsed.emotion);
+            const aTtsBuffer = await processor.generateTTS(adminParsed.text, aSelectedVoiceId, adminParsed.emotion);
             
-            // תיוק לקטגוריה הנדרשת
             const adminFinalFolder = `${cleanAndSanitizeFolder(ctx.listenerFolder)}/${adminParsed.category}`;
             const nextFileNum = await yemot.getNextSequenceFileName(adminFinalFolder);
             const finalPath = `ivr2:/${adminFinalFolder}/${nextFileNum}.wav`;
@@ -462,14 +429,10 @@ async function handleAdminFlow(query, ctx, yemot) {
     return responseBuilder;
 }
 
-// ============================================================================
-// מנהל מסלול מאזינים פשוטים (Listener Flow Controller)
-// נטול סממני רובוטיקה, עם פילטר צניעות חרדי והפקה ברקע אסינכרונית.
-// ============================================================================
+// ==================== מנהל מסלול מאזינים (Listener Flow) ====================
 async function handleListenerFlow(query, ctx, yemot) {
     let state = 0;
     
-    // ניתוח השלבים למאזינים (חלק וזריז)
     if (query.ListenerWaitOrExit !== undefined) state = 2030;
     else if (query.VoiceIndex !== undefined) state = 2020;
     else if (query.VoiceGender !== undefined) state = 2010;
@@ -481,10 +444,10 @@ async function handleListenerFlow(query, ctx, yemot) {
         case 0:
             responseBuilder = new YemotCommandBuilder("read")
                 .addText("ברוכים הבאים למחולל ההקראות")
-                .addText("מערכות האולפן ערוכות לקליטת התוכן שלכם")
+                .addText("המערכות ערוכות לקליטת הנתונים שלכם")
                 .addText("אנא הקליטו את הטקסט שברצונכם להקריא ולאחר מכן הקישו סולמית")
                 .setRecordInput("UserAudioRecord", TEMP_FOLDER, `${ctx.ApiCallId}_lis`)
-                .addState("yemot_token", ctx.YemotToken)
+                .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones)
                 .addState("listener_folder", ctx.listenerFolder);
             break;
 
@@ -493,20 +456,21 @@ async function handleListenerFlow(query, ctx, yemot) {
                 .addText("ההקלטה נקלטה במערכת")
                 .addText("לבחירת קריין גבר הקישו 1 לבחירת קריינית אישה הקישו 2")
                 .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, false, false) 
-                .addState("yemot_token", ctx.YemotToken)
+                .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones)
                 .addState("listener_folder", ctx.listenerFolder);
             break;
 
         case 2010:
-            if (query.VoiceGender !== "1" && query.VoiceGender !== "2") {
+            const lisGenderChoice = InputValidator.getFirstDigit(query.VoiceGender);
+            if (lisGenderChoice !== "1" && lisGenderChoice !== "2") {
                 responseBuilder = new YemotCommandBuilder("read")
                     .addText("בחירה לא חוקית לבחירת קריין גבר הקישו 1 לקול נשי הקישו 2")
                     .setReadDigitsAdvanced("VoiceGender", 1, 1, 10, true, false, false)
-                    .addState("yemot_token", ctx.YemotToken).addState("listener_folder", ctx.listenerFolder);
+                    .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
                 break;
             }
 
-            const isMale = query.VoiceGender === "1";
+            const isMale = lisGenderChoice === "1";
             const voices = isMale ? VOICES_REGISTRY.MALE : VOICES_REGISTRY.FEMALE;
             
             responseBuilder = new YemotCommandBuilder("read").addText("אנא בחרו את הקריין הרצוי מתוך הרשימה הבאה");
@@ -519,42 +483,56 @@ async function handleListenerFlow(query, ctx, yemot) {
 
             responseBuilder.setReadDigitsAdvanced("VoiceIndex", 2, 2, 15, true, true, false)
                 .addState("gender", isMale ? "MALE" : "FEMALE")
-                .addState("yemot_token", ctx.YemotToken).addState("listener_folder", ctx.listenerFolder);
+                .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
             break;
 
         case 2020:
             const voiceListCheck = query.gender === "MALE" ? VOICES_REGISTRY.MALE : VOICES_REGISTRY.FEMALE;
             let checkIdx = parseInt(query.VoiceIndex, 10) - 1;
-            const selectedVoiceId = (checkIdx >= 0 && checkIdx < voiceListCheck.length) ? voiceListCheck[checkIdx].id : voiceListCheck[0].id;
+            
+            if (isNaN(checkIdx) || checkIdx < 0 || checkIdx >= voiceListCheck.length) {
+                responseBuilder = new YemotCommandBuilder("read")
+                    .addText("בחירה לא חוקית אנא הקישו שוב את מספר הקול הרצוי מתוך הרשימה ובסיום סולמית")
+                    .setReadDigitsAdvanced("VoiceIndex", 2, 2, 15, true, true, false)
+                    .addState("gender", query.gender).addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
+                break;
+            }
+
+            const selectedVoiceId = voiceListCheck[checkIdx].id;
 
             responseBuilder = new YemotCommandBuilder("read")
-                .addText("הנתונים נשלחו לעיבוד")
-                .addText("תהליך ההפקה אורך מספר דקות")
-                .addText("להמתנה על הקו להשלמת ההפקה הקישו 1")
-                .addText("כדי שההפקה תתבצע ברקע ולהמשיך הלאה במערכת הקישו 2")
+                .addText("הנתונים נשלחו לעיבוד המערכות")
+                .addText("תהליך העיבוד אורך מספר דקות")
+                .addText("להמתנה על הקו להשלמת העיבוד הקישו 1")
+                .addText("כדי שההליך יתבצע ברקע ולהמשיך הלאה במערכת הקישו 2")
                 .setReadDigitsAdvanced("ListenerWaitOrExit", 1, 1, 10, true, false, false)
                 .addState("voiceId", selectedVoiceId)
-                .addState("yemot_token", ctx.YemotToken)
+                .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones)
                 .addState("listener_folder", ctx.listenerFolder);
             break;
 
         case 2030:
-            const waitChoice = query.ListenerWaitOrExit;
+            const waitChoice = InputValidator.getFirstDigit(query.ListenerWaitOrExit);
             const chosenVoiceId = query.voiceId;
             
-            // תיוג לתהליך רקע אסינכרוני עם השהיה אנושית של 3 דקות והפעלת מסנן החרדי!
+            // מריץ את העיבוד ברקע כדי לדמות תהליך ידני של אולפן. כולל סינון חרדי.
             processListenerAudioInBackground(yemot, ctx.ApiCallId, ctx.listenerFolder, chosenVoiceId);
 
             if (waitChoice === "1") {
-                // המאזין בחר להמתין. מאחר שמגבלת הפסקסק היא 45 שניות, אין מנוס אלא לשחרר אותו.
                 responseBuilder = new YemotCommandBuilder("id_list_message")
-                    .addText("עקב עומס במערכות ההפקה תתבצע ברקע וניתן לחזור אליה מאוחר יותר")
-                    .addText("הינך מוחזר לתפריט הראשי ההפקה תהיה מוכנה בעוד מספר דקות")
+                    .addText("עקב עומס במערכות העיבוד יתבצע ברקע וניתן לחזור אליו מאוחר יותר")
+                    .addText("הינך מוחזר לתפריט הראשי הקובץ יהיה מוכן בעוד מספר דקות")
+                    .addGoToFolder("/");
+            } else if (waitChoice === "2") {
+                responseBuilder = new YemotCommandBuilder("id_list_message")
+                    .addText("הינך מוחזר לתפריט הראשי הקובץ יהיה מוכן בעוד מספר דקות")
                     .addGoToFolder("/");
             } else {
-                responseBuilder = new YemotCommandBuilder("id_list_message")
-                    .addText("הינך מוחזר לתפריט הראשי ההפקה תהיה מוכנה בעוד מספר דקות")
-                    .addGoToFolder("/");
+                responseBuilder = new YemotCommandBuilder("read")
+                    .addText("בחירה לא חוקית להמתנה על הקו הקישו 1 להפקת רקע הקישו 2")
+                    .setReadDigitsAdvanced("ListenerWaitOrExit", 1, 1, 10, true, false, false)
+                    .addState("voiceId", chosenVoiceId)
+                    .addState("yemot_token", ctx.YemotToken).addState("admin_phones", query.admin_phones).addState("listener_folder", ctx.listenerFolder);
             }
             break;
 
@@ -566,25 +544,20 @@ async function handleListenerFlow(query, ctx, yemot) {
 }
 
 // ============================================================================
-// פונקציית הנתב הראשית (Main Routing Handler)
+// נתב ראשי (Main Entry Point)
 // ============================================================================
 module.exports = async (req, res) => {
-    let yemotFinalResponse = "";
-    
     try {
         const query = req.method === 'POST' ? { ...req.query, ...req.body } : req.query || {};
         
-        // הגנת ניתוק
         if (query.hangup === "yes") {
-            TelemetryLogger.info("MainHandler", "Hangup", `הלקוח ניתק. (CallID: ${query.ApiCallId})`);
+            TelemetryLogger.info("Main", "Hangup", `נותק ע"י לקוח. ID: ${query.ApiCallId}`);
             res.setHeader('Content-Type', 'text/plain; charset=utf-8');
             return res.status(200).send("");
         }
 
         const ctx = extractContext(query);
-        
         if (!ctx.YemotToken) {
-            TelemetryLogger.error("MainHandler", "Auth", "חסר טוקן בהגדרות השלוחה.");
             return res.status(200).send("id_list_message=t-תקלה במערכת חסר מפתח הגדרה&hangup=yes");
         }
 
@@ -593,22 +566,19 @@ module.exports = async (req, res) => {
         
         let responseBuilder = null;
 
-        // הנתב הראשי
         if (ctx.isAdmin) {
-            TelemetryLogger.info("Router", "AdminFlow", `נכנס מנהל: ${ctx.ApiPhone}`);
             responseBuilder = await handleAdminFlow(query, ctx, yemot);
         } else {
-            TelemetryLogger.info("Router", "ListenerFlow", `נכנס מאזין: ${ctx.ApiPhone}`);
             responseBuilder = await handleListenerFlow(query, ctx, yemot);
         }
 
-        yemotFinalResponse = responseBuilder.build();
+        const yemotFinalResponse = responseBuilder.build();
         
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.status(200).send(yemotFinalResponse);
 
     } catch (error) {
-        TelemetryLogger.error("MainHandler", "CriticalError", "קריסת שרת:", error);
+        TelemetryLogger.error("Main", "CriticalError", "קריסת שרת", error);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.status(200).send("id_list_message=t-אירעה שגיאה במערכת אנו מתנצלים&go_to_folder=/");
     }
