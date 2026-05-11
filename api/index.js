@@ -110,34 +110,32 @@ class YemotCommandBuilder {
     }
 
     build() {
-        let res = "";
-        const textPart = this.contentBlocks.join('.');
+    let res = "";
 
-        if (this.action === "read" && this.params.length > 0) {
-            res = `read=${textPart}=${this.params.join(',')}`;
-        } else if (this.action === "id_list_message") {
-            res = `id_list_message=${textPart}`;
-        } else if (this.action === "go_to_folder") {
-            res = `go_to_folder=${this.goToFolder || "/"}`;
-        } else {
-            res = `${this.action}=${textPart}`;
-        }
+    const textPart = this.contentBlocks.join('.');
 
-        let index = 0;
-        let apiAddStr = "";
-        for (const [key, value] of Object.entries(this.nextState)) {
-            apiAddStr += `&api_add_${index}=${key}=${encodeURIComponent(value)}`;
-            index++;
-        }
-
-        res += apiAddStr;
-
-        if (this.goToFolder && this.action !== "go_to_folder" && this.action !== "read") {
-            res += `&go_to_folder=${this.goToFolder}`;
-        }
-
-        return res;
+    if (this.action === "read" && this.params.length > 0) {
+        res = `read=${textPart}^${this.params.join('>')}`;
+    } else if (this.action === "id_list_message") {
+        res = `id_list_message=${textPart}`;
+    } else if (this.action === "go_to_folder") {
+        res = `go_to_folder=${this.goToFolder || "/"}`;
+    } else {
+        res = `${this.action}=${textPart}`;
     }
+
+    let i = 0;
+    for (const [k,v] of Object.entries(this.nextState)) {
+        res += `*api_add_${i}^${k}^${encodeURIComponent(v)}`;
+        i++;
+    }
+
+    if (this.goToFolder && this.action !== "go_to_folder") {
+        res += `*go_to_folder^${this.goToFolder}`;
+    }
+
+    return res;
+}
 }
 
 // ============================================================================
