@@ -1,10 +1,3 @@
-/**
- * @file api/index.js
- * @version 22.0.0 (Enterprise Voice Generator Edition)
- * @description מודול IVR המחבר את מערכת הטלפוניה של ימות המשיח.
- * פיצול מסלולי מאזינים ומנהלים, פילטר תוכן קפדני (Glatt Kosher), מניעת השמעות מיותרות
- * ותפריטים מהירים ללא "לאישור הקישו 1".
- */
 
 const { GeminiManager, YemotManager, VOICES_REGISTRY, TelemetryLogger, SecurityManager, InputValidator } = require('./core');
 
@@ -110,32 +103,34 @@ class YemotCommandBuilder {
     }
 
     build() {
-    let res = "";
+        let res = "";
+        const textPart = this.contentBlocks.join('.');
 
-    const textPart = this.contentBlocks.join('.');
+        if (this.action === "read" && this.params.length > 0) {
+            res = `read=${textPart}=${this.params.join(',')}`;
+        } else if (this.action === "id_list_message") {
+            res = `id_list_message=${textPart}`;
+        } else if (this.action === "go_to_folder") {
+            res = `go_to_folder=${this.goToFolder || "/"}`;
+        } else {
+            res = `${this.action}=${textPart}`;
+        }
 
-    if (this.action === "read" && this.params.length > 0) {
-        res = `read=${textPart}^${this.params.join('>')}`;
-    } else if (this.action === "id_list_message") {
-        res = `id_list_message=${textPart}`;
-    } else if (this.action === "go_to_folder") {
-        res = `go_to_folder=${this.goToFolder || "/"}`;
-    } else {
-        res = `${this.action}=${textPart}`;
+        let index = 0;
+        let apiAddStr = "";
+        for (const [key, value] of Object.entries(this.nextState)) {
+            apiAddStr += `&api_add_${index}=${key}=${encodeURIComponent(value)}`;
+            index++;
+        }
+
+        res += apiAddStr;
+
+        if (this.goToFolder && this.action !== "go_to_folder" && this.action !== "read") {
+            res += `&go_to_folder=${this.goToFolder}`;
+        }
+
+        return res;
     }
-
-    let i = 0;
-    for (const [k,v] of Object.entries(this.nextState)) {
-        res += `*api_add_${i}^${k}^${encodeURIComponent(v)}`;
-        i++;
-    }
-
-    if (this.goToFolder && this.action !== "go_to_folder") {
-        res += `*go_to_folder^${this.goToFolder}`;
-    }
-
-    return res;
-}
 }
 
 // ============================================================================
@@ -609,5 +604,5 @@ module.exports = async (req, res) => {
         TelemetryLogger.error("Main", "CriticalError", "קריסת שרת", error);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.status(200).send("id_list_message=t-אירעה שגיאה במערכת אנו מתנצלים&go_to_folder=/");
-    }
+    } 
 };
